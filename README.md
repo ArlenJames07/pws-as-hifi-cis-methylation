@@ -93,23 +93,6 @@ pws-as-hifi-cis-methylation/
 | `04_haplotype_methylation` | `pbcpgtools.py` | Processing of PacBio native CpG methylation calls and haplotype-resolved methylation information |
 | `05_figures` | figure scripts | Generation of manuscript figures and downstream summary visualizations |
 
----
-
-## Manuscript figure scripts
-
-| Manuscript output | Script |
-|---|---|
-| Figure 1: imprinting-centre methylation validation | `scripts/hifi_multiomics_pipeline/05_figures/phase1_figure1_v2.py` |
-| Figure 2: reciprocal cis-methylation architecture | `scripts/hifi_multiomics_pipeline/05_figures/paper_vf_phase2_reciprocal_cis_architecture.py` |
-| Figure 2 improved version | `scripts/hifi_multiomics_pipeline/05_figures/create_figure2_reciprocal_cis_architecture_improved.py` |
-| Figure 3: SNHG14/ICR-proximal boundary mapping | `scripts/hifi_multiomics_pipeline/05_figures/phase3_boundary_mapping.py` |
-| Figure 4: per-molecule cis-methylation architecture | `scripts/hifi_multiomics_pipeline/05_figures/phase4_per_molecule_cis_architecture.py` |
-| Figure 4 manuscript layout update | `scripts/hifi_multiomics_pipeline/05_figures/update_figure4_manuscript_layout.py` |
-| Figure 5: structural context and flanking methylation | `scripts/hifi_multiomics_pipeline/05_figures/make_figure5_structural_context_v2.py` |
-| Master workflow | `scripts/hifi_multiomics_pipeline/05_figures/q1_pws_as_master_pipeline.py` |
-
----
-
 ## Data availability and privacy
 
 Raw human genomic data are **not included** in this GitHub repository because of participant privacy, consent restrictions and the sensitive nature of long-read human genome sequencing data.
