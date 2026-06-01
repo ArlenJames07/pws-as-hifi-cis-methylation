@@ -1,5 +1,12 @@
 # pws-as-hifi-cis-methylation
 
+Author Pipeline: Arlen James Mosquera Ruiz
+Institution: Pontificia Universidad Javeriana Cali
+ORCID: 0009-0008-0796-9099
+Contact: arlen22@javerianacali.edu.co 
+
+
+
 ## Overview
 PacBio HiFi workflows for haplotype- and molecule-resolved methylation, CNV, SV and phasing analysis of the PWS/AS 15q11–q13 imprinted domain.
 
