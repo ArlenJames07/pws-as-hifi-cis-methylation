@@ -1,0 +1,36 @@
+# Raw human genomic data
+*.bam
+*.bai
+*.cram
+*.crai
+*.sam
+*.fastq
+*.fastq.gz
+*.fq
+*.fq.gz
+
+# Large genomic outputs
+*.vcf.gz
+*.bcf
+*.bed.gz
+*.bigWig
+*.bw
+*.fa
+*.fasta
+*.fai
+
+# Results and logs
+results/
+outputs/
+logs/
+tmp/
+temp/
+
+# Python / R
+__pycache__/
+*.pyc
+.Rhistory
+.RData
+
+# System
+.DS_Store
