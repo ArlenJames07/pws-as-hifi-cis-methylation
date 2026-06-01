@@ -52,15 +52,19 @@ This wrapper executes the current source script from:
 
 - Phase 4 generator: `phase4_per_molecule_cis_architecture.py`
 - Publication renderer: `update_figure4_manuscript_layout.py`
+- Figure-named entry point: `figure_snord116_single_molecule_architecture.py`
 - Primary outputs:
   - `Figure_SNORD116_single_molecule_architecture.png`
   - `Figure_SNORD116_single_molecule_architecture.pdf`
   - `Figure_SNORD116_single_molecule_architecture.svg`
+  - root-level copies in `/home/rare/arlen/paper_vf/`
 
 Run order:
 
 1. `phase4_per_molecule_cis_architecture.py`
 2. `update_figure4_manuscript_layout.py`
+
+The figure-named entry point is a convenience wrapper around the publication renderer.
 
 These wrappers execute the current source scripts from:
 
