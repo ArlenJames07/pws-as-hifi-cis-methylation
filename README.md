@@ -1,9 +1,9 @@
 # pws-as-hifi-cis-methylation
 
-Author Pipeline: Arlen James Mosquera Ruiz
-Institution: Pontificia Universidad Javeriana Cali
-ORCID: 0009-0008-0796-9099
-Contact: arlen22@javerianacali.edu.co 
+Author Pipeline: Arlen James Mosquera Ruiz \\
+Institution: Pontificia Universidad Javeriana Cali \\
+ORCID: 0009-0008-0796-9099 \\
+Contact: arlen22@javerianacali.edu.co \\
 
 
 
