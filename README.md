@@ -123,7 +123,7 @@ Raw PacBio HiFi sequencing data and aligned BAM files used in the study are bein
 
 If you use this pipeline, code, or processed summary outputs, please cite:
 
-Mosquera-Ruiz A, Tobar-Tosse F, Londoño Velasco E, Lores J, Losada-Casallas KD, Ortega JG, Riccio-Rengifo C, Jaramillo-Botero A, Sharma A. (2026). *Reciprocal imprinting disorder deletions reveal coordinated cis-methylation architecture of the human 15q11–q13 domain*. Manuscript in preparation / under review.
+Mosquera-Ruiz A, Tobar-Tosse F, Londoño Velasco E, Lores J, Bolaños-Martinez, I.A, Losada-Casallas KD, Ortega JG, Riccio-Rengifo C, Jaramillo-Botero A, Sharma A. (2026). *Reciprocal imprinting disorder deletions reveal coordinated cis-methylation architecture of the human 15q11–q13 domain*. Manuscript in preparation / under review.
 
 ---
 
