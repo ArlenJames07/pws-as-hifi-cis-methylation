@@ -1,0 +1,3 @@
+warning
+At least one primary sliding window had zero CpGs.
+LOESS smoothing was not added because the current workflow has no dedicated LOESS-based boundary caller; omitted rather than fabricated.

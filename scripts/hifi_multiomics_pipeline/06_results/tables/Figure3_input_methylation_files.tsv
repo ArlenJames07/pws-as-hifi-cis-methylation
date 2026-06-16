@@ -1,0 +1,15 @@
+sample	layer	path
+017C	hap1	/home/rare/arlen/outputs/methylation/genomes_2/08_1_C01_bc2059_017C.hap1.bed
+017C	hap2	/home/rare/arlen/outputs/methylation/genomes_2/08_1_C01_bc2059_017C.hap2.bed
+017C	combined	/home/rare/arlen/outputs/methylation/genomes_2/08_1_C01_bc2059_017C.combined.bed
+018C	hap2	/home/rare/arlen/outputs/methylation/genomes_2/08_1_D01_bc2060_018C.hap2.bed
+018C	hap1	/home/rare/arlen/outputs/methylation/genomes_2/08_1_D01_bc2060_018C.hap1.bed
+018C	combined	/home/rare/arlen/outputs/methylation/genomes_2/08_1_D01_bc2060_018C.combined.bed
+001P	combined	/home/rare/arlen/outputs/methylation/genomes_2/08_1_A01_bc2043_001P.combined.bed
+002P	combined	/home/rare/arlen/outputs/methylation/genomes_2/08_1_A01_bc2044_002P.combined.bed
+005P	combined	/home/rare/arlen/outputs/methylation/genomes_2/08_1_A01_bc2047_005P.combined.bed
+006P	combined	/home/rare/arlen/outputs/methylation/genomes_2/08_1_B01_bc2048_006P.combined.bed
+007P	combined	/home/rare/arlen/outputs/methylation/genomes_2/08_1_C01_bc2049_007P.combined.bed
+013A	combined	/home/rare/arlen/outputs/methylation/genomes_2/08_1_A01_bc2055_013A.combined.bed
+014A	combined	/home/rare/arlen/outputs/methylation/genomes_2/08_1_A01_bc2056_014A.combined.bed
+016A	combined	/home/rare/arlen/outputs/methylation/genomes_2/08_1_B01_bc2058_016A.combined.bed

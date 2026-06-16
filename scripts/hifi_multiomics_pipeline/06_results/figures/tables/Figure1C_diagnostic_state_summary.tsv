@@ -1,0 +1,5 @@
+molecular_mechanism	n_samples	expected_state	observed_state	interpretation
+PWS-DEL	5	M / absent	M / absent	paternal deletion
+PWS-mUPD	1	M / M	M / M	maternal UPD (duplicated maternal state)
+AS-DEL	3	absent / P	absent / P	maternal deletion
+Control	2	M / P	M / P	canonical biparental state

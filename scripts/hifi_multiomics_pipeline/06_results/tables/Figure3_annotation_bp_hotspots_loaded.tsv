@@ -1,0 +1,4 @@
+chrom	start	end	name	source	coordinate	display_color
+chr15	17691439	20454275	BP1	Figure2_T2T_interval	19072857.0	#c6a96e
+chr15	20753698	21183655	BP2	Figure2_T2T_interval	20968676.5	#8faa92
+chr15	25875912	26632507	BP3	Figure2_T2T_interval	26254209.5	#92a8c9

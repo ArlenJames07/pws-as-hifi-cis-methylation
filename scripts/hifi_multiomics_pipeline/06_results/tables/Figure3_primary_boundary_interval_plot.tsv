@@ -1,0 +1,5 @@
+source	label	start	end	color	kind
+Control	Controls	22690600	22696850	#222222	source
+PWS_DEL	PWS-DEL	22690900	22694700	#c7254e	source
+AS_DEL	AS-DEL	22691000	22694800	#2266aa	source
+Consensus	Shared overlap	22691000	22694700	#d99a00	consensus

@@ -1,0 +1,12 @@
+sample_id	syndrome	group	nonchr15_large_cnv_count	nonchr15_large_cnv_total_mb	nonchr15_large_cnv_max_mb	display_label
+001P	Prader-Willi syndrome	PWS_DEL	7	19.646	3.916	PW-1
+002P	Prader-Willi syndrome	PWS_DEL	3	7.848	3.326	PW-2
+005P	Prader-Willi syndrome	PWS_DEL	6	17.548	3.336	PW-3
+006P	Prader-Willi syndrome	PWS_DEL	6	16.772	3.33	PW-4
+007P	Prader-Willi syndrome	PWS_DEL	6	17.72	3.786	PW-5
+004P	Prader-Willi syndrome	PWS_mUPD	3	9.248	3.962	UPD-1
+013A	Angelman syndrome	AS_DEL	10	28.216	4.08	AS-1
+014A	Angelman syndrome	AS_DEL	4	11.778	4.016	AS-2
+016A	Angelman syndrome	AS_DEL	10	28.028	3.336	AS-3
+017C	Unaffected control	CONTROL	4	11.23	3.798	CTRL-1
+018C	Unaffected control	CONTROL	6	18.34	3.904	CTRL-2

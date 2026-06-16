@@ -1,0 +1,12 @@
+sample	path
+001P	/home/rare/arlen/outputs/Variants/Structural_variants/hifi_cnv/08_1_A01_bc2043_001P.PB000696_001P_bc2043_2plex_1_5_16kb.copynum.bedgraph
+002P	/home/rare/arlen/outputs/Variants/Structural_variants/hifi_cnv/08_1_A01_bc2044_002P.PB000696_002P_bc2044_HiFi_16kb.copynum.bedgraph
+004P	/home/rare/arlen/outputs/Variants/Structural_variants/hifi_cnv/08_1_C01_bc2046_004P.PB000696_004P_bc2046_HiFi_16kb.copynum.bedgraph
+005P	/home/rare/arlen/outputs/Variants/Structural_variants/hifi_cnv/08_1_A01_bc2047_005P.PB000696_005P_bc2047_2plex_1_5_16kb.copynum.bedgraph
+006P	/home/rare/arlen/outputs/Variants/Structural_variants/hifi_cnv/08_1_B01_bc2048_006P.PB000696_006P_bc2048_2plex_6_9_16kb.copynum.bedgraph
+007P	/home/rare/arlen/outputs/Variants/Structural_variants/hifi_cnv/08_1_C01_bc2049_007P.PB000696_007P_bc2049_2plex_7_8_16kb.copynum.bedgraph
+013A	/home/rare/arlen/outputs/Variants/Structural_variants/hifi_cnv/08_1_A01_bc2055_013A.PB000696_013A_bc2055_2plex_13_14_18kb.copynum.bedgraph
+014A	/home/rare/arlen/outputs/Variants/Structural_variants/hifi_cnv/08_1_A01_bc2056_014A.PB000696_014A_bc2056_2plex_13_14_18kb.copynum.bedgraph
+016A	/home/rare/arlen/outputs/Variants/Structural_variants/hifi_cnv/08_1_B01_bc2058_016A.PB000696_016D_bc2058_2plex_15_16_17kb.copynum.bedgraph
+017C	/home/rare/arlen/outputs/Variants/Structural_variants/hifi_cnv/08_1_C01_bc2059_017C.PB000696_017C_bc2059_HiFi_16kb.copynum.bedgraph
+018C	/home/rare/arlen/outputs/Variants/Structural_variants/hifi_cnv/08_1_D01_bc2060_018C.PB000696_018C_bc2060_HiFi_16kb.copynum.bedgraph

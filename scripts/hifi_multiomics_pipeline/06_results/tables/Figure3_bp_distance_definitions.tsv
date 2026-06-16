@@ -1,0 +1,4 @@
+bp_landmark_name	bp_start	bp_end	bp_midpoint	distance_from_shared_start_bp	distance_from_shared_midpoint_bp	distance_from_shared_end_bp	distance_type_used_in_figure
+BP1	17691439	20454275	19072857	2236725	2238575	2240425	not used in figure label
+BP2	20753698	21183655	20968676	1507345	1509195	1511045	shared midpoint to nearest interval edge
+BP3	25875912	26632507	26254210	3184912	3183062	3181212	not used in figure label

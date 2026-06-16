@@ -1,0 +1,19 @@
+sample	group	metadata_sample_value	metadata_group_text	expected_retained_parental_allele	expected_SNRPN_IC_state
+001P	PWS_DEL	001P	PWS Prader_DEL Prader	maternal	retained maternal-like methylated allele; paternal allele deleted
+002P	PWS_DEL	002P	PWS Prader_DEL Prader	maternal	retained maternal-like methylated allele; paternal allele deleted
+003P	PWS_DEL	003P	PWS Prader_DEL Prader	maternal	retained maternal-like methylated allele; paternal allele deleted
+004P	PWS_mUPD	004P	PWS Prader_UPD Prader	maternal + maternal	two maternal-like methylated haplotypes
+005P	PWS_DEL	005P	PWS Prader_DEL Prader	maternal	retained maternal-like methylated allele; paternal allele deleted
+006P	PWS_DEL	006P	PWS Prader_DEL Prader	maternal	retained maternal-like methylated allele; paternal allele deleted
+007P	PWS_DEL	007P	PWS Prader_DEL Prader	maternal	retained maternal-like methylated allele; paternal allele deleted
+008D	UNKNOWN	008D	DiGeorge DiGeorge DiGeorge	unknown	unknown
+009D	UNKNOWN	009D	DiGeorge DiGeorge DiGeorge	unknown	unknown
+010D	UNKNOWN	010D	DiGeorge DiGeorge DiGeorge	unknown	unknown
+011D	UNKNOWN	011D	DiGeorge DiGeorge DiGeorge	unknown	unknown
+012D	UNKNOWN	012D	DiGeorge DiGeorge DiGeorge	unknown	unknown
+013A	AS_DEL	013A	AS Angelman Angelman	paternal	retained paternal-like unmethylated allele; maternal allele deleted
+014A	AS_DEL	014A	AS Angelman Angelman	paternal	retained paternal-like unmethylated allele; maternal allele deleted
+015A	AS_DEL	015A	AS Angelman Angelman	paternal	retained paternal-like unmethylated allele; maternal allele deleted
+016D	UNKNOWN	016D	DiGeorge DiGeorge DiGeorge	unknown	unknown
+017C	CONTROL	017C	Control Control Referencia	maternal + paternal	one maternal-like methylated haplotype and one paternal-like unmethylated haplotype
+018C	CONTROL	018C	Control Control Referencia	maternal + paternal	one maternal-like methylated haplotype and one paternal-like unmethylated haplotype

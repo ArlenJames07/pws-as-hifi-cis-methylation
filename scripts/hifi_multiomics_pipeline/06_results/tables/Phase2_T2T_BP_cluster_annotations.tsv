@@ -1,0 +1,4 @@
+name	chrom	start	end	start_mb	end_mb	approx_size	interpretation	overlaps_plotted_range
+BP1	chr15	17691439	20454275	17.691439	20.454275	2.763 Mb	Proximal SD block / BP1 cluster	True
+BP2	chr15	20753698	21183655	20.753698	21.183655	430 kb	BP2 SD block	True
+BP3	chr15	25875912	26632507	25.875912	26.632507	757 kb	Distal PWS/AS BP3 SD block	True

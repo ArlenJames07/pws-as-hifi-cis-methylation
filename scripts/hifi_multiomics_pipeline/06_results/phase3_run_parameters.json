@@ -1,0 +1,49 @@
+{
+  "methylation_dir": "/home/rare/arlen/outputs/methylation/genomes_2",
+  "outdir": "/home/rare/arlen/pws-as-hifi-cis-methylation/scripts/hifi_multiomics_pipeline/06_results",
+  "assignment_table": "/home/rare/arlen/pws-as-hifi-cis-methylation/scripts/hifi_multiomics_pipeline/06_results/tables/Figure1C_parental_assignment.tsv",
+  "chrom": "chr15",
+  "region_start": 22000000,
+  "region_end": 29000000,
+  "window_size": 1000,
+  "step_size": 100,
+  "consecutive_windows": 5,
+  "enter_threshold": 0.4,
+  "exit_threshold": 0.1,
+  "control_match_window": 10000,
+  "control_signal_mode": "absolute",
+  "control_signal_formula": "|maternal - paternal|",
+  "patient_signal_formulas": {
+    "PWS_DEL": "retained maternal - control biallelic baseline",
+    "AS_DEL": "control biallelic baseline - retained paternal"
+  },
+  "interval_source_for_reviewer_figure": "computed_from_boundary_calling",
+  "validated_interval_tolerance_bp": 1000,
+  "bootstrap_replicates": 100,
+  "bootstrap_seed": 1729,
+  "bootstrap_local_flank": 20000,
+  "control_samples": [
+    "017C",
+    "018C"
+  ],
+  "pws_del_samples": [
+    "001P",
+    "002P",
+    "005P",
+    "006P",
+    "007P"
+  ],
+  "as_del_samples": [
+    "013A",
+    "014A",
+    "016A"
+  ],
+  "pws_mupd_samples_context_only": [
+    "004P"
+  ],
+  "pws_mupd_present_in_inputs": [
+    "004P"
+  ],
+  "ctcf_status": "not_available",
+  "validation_warning_count": 2
+}

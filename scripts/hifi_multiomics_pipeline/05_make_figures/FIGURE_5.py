@@ -37,8 +37,18 @@ from scipy import stats
 
 
 DEFAULT_OUTDIR = Path("/home/rare/arlen/pws-as-hifi-cis-methylation/scripts/hifi_multiomics_pipeline/06_results")
+DEFAULT_INPUT_TABLE_DIR = Path("/home/rare/arlen/paper_vf/tables")
 DEFAULT_FASTA = Path("/home/rare/arlen/reference/chm13v22.fasta")
 DEFAULT_GTF = Path("/home/rare/arlen/reference/chm13v22.sorted.gtf")
+
+REQUIRED_INPUT_TABLES = [
+    "Figure5A_deletion_breakpoint_characterization.tsv",
+    "Figure5A_haplotype_coverage_tracks.tsv.gz",
+    "Figure5B_genomewide_cnv_calls.tsv.gz",
+    "Figure5C_sv_calls.tsv.gz",
+    "Figure5C_sv_burden_by_sample.tsv",
+    "Figure5D_breakpoint_flanking_methylation_profile.tsv.gz",
+]
 
 COHORT = [
     ("001P", "Prader-Willi syndrome", "PWS_DEL"),
@@ -159,6 +169,28 @@ class GeneInterval:
 def ensure_dir(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def missing_input_tables(table_dir: Path) -> list[Path]:
+    return [table_dir / name for name in REQUIRED_INPUT_TABLES if not (table_dir / name).exists()]
+
+
+def resolve_input_table_dir(outdir: Path, requested_table_dir: Path | None = None) -> Path:
+    candidates = [requested_table_dir] if requested_table_dir is not None else [outdir / "tables", DEFAULT_INPUT_TABLE_DIR]
+    checked: list[Path] = []
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        candidate = candidate.expanduser().resolve()
+        checked.append(candidate)
+        if not missing_input_tables(candidate):
+            return candidate
+    details = "\n".join(f"- {path}" for path in checked)
+    raise FileNotFoundError(
+        "Figure 5 input tables were not found. Run the Figure 5 table-generation step first, "
+        "or pass --table-dir to a directory containing the Figure5*.tsv inputs.\n"
+        f"Checked:\n{details}"
+    )
 
 
 def build_sample_display_labels() -> dict[str, str]:
@@ -1824,6 +1856,12 @@ def write_report(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--outdir", type=Path, default=DEFAULT_OUTDIR)
+    parser.add_argument(
+        "--table-dir",
+        type=Path,
+        default=None,
+        help="Directory containing precomputed Figure5 input tables. Defaults to outdir/tables, then the original paper_vf tables.",
+    )
     parser.add_argument("--fasta", type=Path, default=DEFAULT_FASTA)
     parser.add_argument("--gtf", type=Path, default=DEFAULT_GTF)
     return parser.parse_args()
@@ -1835,13 +1873,14 @@ def main() -> None:
     tables_dir = ensure_dir(outdir / "tables")
     figures_dir = ensure_dir(outdir / "figures")
     reports_dir = ensure_dir(outdir / "reports")
+    input_tables_dir = resolve_input_table_dir(outdir, args.table_dir)
 
-    deletion_df = prepare_deletion_panel_data(pd.read_csv(tables_dir / "Figure5A_deletion_breakpoint_characterization.tsv", sep="\t"))
-    coverage_df = pd.read_csv(tables_dir / "Figure5A_haplotype_coverage_tracks.tsv.gz", sep="\t")
-    cnv_df = pd.read_csv(tables_dir / "Figure5B_genomewide_cnv_calls.tsv.gz", sep="\t")
-    sv_calls_df = pd.read_csv(tables_dir / "Figure5C_sv_calls.tsv.gz", sep="\t")
-    sv_burden_df = pd.read_csv(tables_dir / "Figure5C_sv_burden_by_sample.tsv", sep="\t")
-    methyl_profile_df = pd.read_csv(tables_dir / "Figure5D_breakpoint_flanking_methylation_profile.tsv.gz", sep="\t")
+    deletion_df = prepare_deletion_panel_data(pd.read_csv(input_tables_dir / "Figure5A_deletion_breakpoint_characterization.tsv", sep="\t"))
+    coverage_df = pd.read_csv(input_tables_dir / "Figure5A_haplotype_coverage_tracks.tsv.gz", sep="\t")
+    cnv_df = pd.read_csv(input_tables_dir / "Figure5B_genomewide_cnv_calls.tsv.gz", sep="\t")
+    sv_calls_df = pd.read_csv(input_tables_dir / "Figure5C_sv_calls.tsv.gz", sep="\t")
+    sv_burden_df = pd.read_csv(input_tables_dir / "Figure5C_sv_burden_by_sample.tsv", sep="\t")
+    methyl_profile_df = pd.read_csv(input_tables_dir / "Figure5D_breakpoint_flanking_methylation_profile.tsv.gz", sep="\t")
 
     cnv_burden, cnv_stats = prepare_cnv_burden(cnv_df)
     sv_burden, sv_stats = prepare_sv_burden(sv_burden_df, sv_calls_df)

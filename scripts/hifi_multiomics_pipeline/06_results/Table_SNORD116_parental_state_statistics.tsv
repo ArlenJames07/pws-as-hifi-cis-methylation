@@ -1,0 +1,2 @@
+comparison	region	test	n_molecules_group_a	n_molecules_group_b	n_samples_group_a	n_samples_group_b	median_group_a	median_group_b	delta_median	ci_low	ci_high	statistic_U	p_value	rank_biserial	reference_line
+AS-DEL retained paternal vs PWS-DEL retained maternal	SNORD116	Mann-Whitney U	100	254	3	5	0.7012378688849277	0.6296558245324848	0.07158204435244286	0.04742818127872968	0.09746225479084528	18938.0	6.216302812067241e-13	0.4911811023622048	0.5

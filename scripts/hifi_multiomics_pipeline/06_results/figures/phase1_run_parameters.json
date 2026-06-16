@@ -1,0 +1,93 @@
+{
+  "cohort": [
+    {
+      "sample_id": "001P",
+      "clinical_diagnosis": "Prader-Willi syndrome",
+      "molecular_mechanism": "PWS-DEL"
+    },
+    {
+      "sample_id": "002P",
+      "clinical_diagnosis": "Prader-Willi syndrome",
+      "molecular_mechanism": "PWS-DEL"
+    },
+    {
+      "sample_id": "005P",
+      "clinical_diagnosis": "Prader-Willi syndrome",
+      "molecular_mechanism": "PWS-DEL"
+    },
+    {
+      "sample_id": "006P",
+      "clinical_diagnosis": "Prader-Willi syndrome",
+      "molecular_mechanism": "PWS-DEL"
+    },
+    {
+      "sample_id": "007P",
+      "clinical_diagnosis": "Prader-Willi syndrome",
+      "molecular_mechanism": "PWS-DEL"
+    },
+    {
+      "sample_id": "004P",
+      "clinical_diagnosis": "Prader-Willi syndrome",
+      "molecular_mechanism": "PWS-mUPD"
+    },
+    {
+      "sample_id": "013A",
+      "clinical_diagnosis": "Angelman syndrome",
+      "molecular_mechanism": "AS-DEL"
+    },
+    {
+      "sample_id": "014A",
+      "clinical_diagnosis": "Angelman syndrome",
+      "molecular_mechanism": "AS-DEL"
+    },
+    {
+      "sample_id": "016A",
+      "clinical_diagnosis": "Angelman syndrome",
+      "molecular_mechanism": "AS-DEL"
+    },
+    {
+      "sample_id": "017C",
+      "clinical_diagnosis": "Unaffected control",
+      "molecular_mechanism": "Control"
+    },
+    {
+      "sample_id": "018C",
+      "clinical_diagnosis": "Unaffected control",
+      "molecular_mechanism": "Control"
+    }
+  ],
+  "regions": {
+    "imprinted_domain": {
+      "chrom": "chr15",
+      "start": 22500000,
+      "end": 28500000
+    },
+    "pws_as_ic": {
+      "chrom": "chr15",
+      "start": 22691258,
+      "end": 22693494,
+      "name": "ICR_893_SNHG14_SNRPN_SNURF",
+      "source": "canonical PWS-AS ICR row ICR_893 from genomewide_icr_deviation_validation; overlaps SNRPN/SNHG14/SNURF regulatory interval"
+    }
+  },
+  "thresholds": {
+    "maternal_methylation": 0.85,
+    "paternal_methylation": 0.15,
+    "minimum_mean_coverage_per_haplotype": 10.0,
+    "minimum_cpgs": 5
+  },
+  "input_paths": {
+    "vcf_dir": "/mnt/diskrare/arlenb/08/hiphase_results/variants",
+    "bam_dir": "/mnt/diskrare/arlenb/08/hiphase_results/bamfiles",
+    "methylation_dir": "/home/rare/arlen/outputs/methylation/genomes_2",
+    "cnv_dir": "/home/rare/arlen/outputs/Variants/Structural_variants/hifi_cnv",
+    "gtf": "/home/rare/arlen/reference/chm13v22.sorted.gtf",
+    "metadata": "/home/rare/arlen/outputs/methylation/metadata/metadata_methylation.csv"
+  },
+  "depth_methods": {
+    "total_HiFi_reads": "sum(mapped + unmapped) from samtools idxstats on HiPhase BAM",
+    "mean_depth_genome_wide": "2 * final hificnv uncorrected haploid coverage estimate from sample log",
+    "mean_depth_chr15": "samtools coverage -r chr15 meandepth",
+    "mean_depth_per_haplotype_at_15q11-q13": "reference-consuming CIGAR bases for HP-tagged reads over chr15:22.5-28.5 Mb divided by region length"
+  }
+}

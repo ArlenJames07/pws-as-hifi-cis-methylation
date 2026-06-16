@@ -28,6 +28,7 @@ from scipy import stats
 
 
 DEFAULT_OUTDIR = Path("/home/rare/arlen/pws-as-hifi-cis-methylation/scripts/hifi_multiomics_pipeline/06_results")
+DEFAULT_INPUT_TABLE_DIR = Path("/home/rare/arlen/paper_vf/tables")
 
 FIGURE_BASENAMES = [
     "Figure_SNORD116_single_molecule_architecture",
@@ -41,6 +42,18 @@ TABLE_MOLECULE_SUMMARY = "Table_SNORD116_molecule_summary.tsv"
 TABLE_ENTROPY_STATS = "Table_SNORD116_entropy_statistics.tsv"
 TABLE_PARENTAL_STATS = "Table_SNORD116_parental_state_statistics.tsv"
 PAIRWISE_Q_DISPLAY_THRESHOLD = 0.05
+
+REQUIRED_INPUT_TABLES = [
+    "Figure4_panelA_control_paternal_SNORD116_rows.tsv",
+    "Figure4_panelA_control_paternal_SNORD116_matrix.tsv.gz",
+    "Figure4_panelB_control_maternal_SNORD116_rows.tsv",
+    "Figure4_panelB_control_maternal_SNORD116_matrix.tsv.gz",
+    "Figure4_gene_features.tsv",
+    "Figure4_SNORD116_shared_core_window.tsv",
+    "Figure4_panelC_entropy_plot_input.tsv",
+    "Figure4_panelD_SNORD116_plot_input.tsv",
+    "Figure4_single_molecule_CpG_calls.tsv.gz",
+]
 
 CPG_UNMETH = "#3A74B7"
 CPG_METH = "#D6544A"
@@ -98,6 +111,28 @@ CONTROL_PANEL_MAP = {
 def ensure_dir(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def missing_input_tables(table_dir: Path) -> list[Path]:
+    return [table_dir / name for name in REQUIRED_INPUT_TABLES if not (table_dir / name).exists()]
+
+
+def resolve_input_table_dir(outdir: Path, requested_table_dir: Path | None = None) -> Path:
+    candidates = [requested_table_dir] if requested_table_dir is not None else [outdir / "tables", DEFAULT_INPUT_TABLE_DIR]
+    checked: list[Path] = []
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        candidate = candidate.expanduser().resolve()
+        checked.append(candidate)
+        if not missing_input_tables(candidate):
+            return candidate
+    details = "\n".join(f"- {path}" for path in checked)
+    raise FileNotFoundError(
+        "Figure 4 input tables were not found. Run the Figure 4 table-generation step first, "
+        "or pass --table-dir to a directory containing the Figure4_*.tsv inputs.\n"
+        f"Checked:\n{details}"
+    )
 
 
 def standardize_region_label(value: str) -> str:
@@ -2000,14 +2035,21 @@ def write_report(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--outdir", type=Path, default=DEFAULT_OUTDIR)
+    parser.add_argument(
+        "--table-dir",
+        type=Path,
+        default=None,
+        help="Directory containing precomputed Figure4_*.tsv input tables. Defaults to outdir/tables, then the original paper_vf tables.",
+    )
     args = parser.parse_args()
 
     outdir = args.outdir
     figdir = ensure_dir(outdir / "figures")
     tbldir = ensure_dir(outdir / "tables")
+    input_tbldir = resolve_input_table_dir(outdir, args.table_dir)
 
-    matrix_a_full, meta_a_rows = load_matrix_and_rows(tbldir, "Figure4_panelA_control_paternal_SNORD116")
-    matrix_b_full, meta_b_rows = load_matrix_and_rows(tbldir, "Figure4_panelB_control_maternal_SNORD116")
+    matrix_a_full, meta_a_rows = load_matrix_and_rows(input_tbldir, "Figure4_panelA_control_paternal_SNORD116")
+    matrix_b_full, meta_b_rows = load_matrix_and_rows(input_tbldir, "Figure4_panelB_control_maternal_SNORD116")
     union_columns = sorted(set(matrix_a_full.columns.tolist()).union(matrix_b_full.columns.tolist()))
     matrix_a_full = matrix_a_full.reindex(columns=union_columns)
     matrix_b_full = matrix_b_full.reindex(columns=union_columns)
@@ -2022,22 +2064,22 @@ def main() -> None:
     matrix_a_display_plot = compress_matrix_for_display(matrix_a_display_raw, MAIN_BARCODE_MAX_COLUMNS)
     matrix_b_display_plot = compress_matrix_for_display(matrix_b_display_raw, MAIN_BARCODE_MAX_COLUMNS)
 
-    feature_df = pd.read_csv(tbldir / "Figure4_gene_features.tsv", sep="\t")
+    feature_df = pd.read_csv(input_tbldir / "Figure4_gene_features.tsv", sep="\t")
     feature_df = feature_df[feature_df["panel"] == "snord116"].copy()
-    shared_core = pd.read_csv(tbldir / "Figure4_SNORD116_shared_core_window.tsv", sep="\t")
+    shared_core = pd.read_csv(input_tbldir / "Figure4_SNORD116_shared_core_window.tsv", sep="\t")
     core_window = (int(shared_core["cpg_position"].min()), int(shared_core["cpg_position"].max()))
     zoom_window = choose_zoom_window(matrix_a_full, matrix_b_full, core_window)
 
-    panel_c_df = pd.read_csv(tbldir / "Figure4_panelC_entropy_plot_input.tsv", sep="\t")
+    panel_c_df = pd.read_csv(input_tbldir / "Figure4_panelC_entropy_plot_input.tsv", sep="\t")
     panel_c_df = panel_c_df[panel_c_df["region"].isin(["PWS-IC", "SNORD116 cluster", "Downstream control"])].copy()
     panel_c_df["region_plot"] = panel_c_df["region"].map(standardize_region_label)
     panel_c_df["sample_group"] = pd.Categorical(panel_c_df["sample_group"], PANEL_C_GROUP_ORDER, ordered=True)
     panel_c_df["region_plot"] = pd.Categorical(panel_c_df["region_plot"], PANEL_C_REGION_ORDER, ordered=True)
 
-    panel_d_df = pd.read_csv(tbldir / "Figure4_panelD_SNORD116_plot_input.tsv", sep="\t")
+    panel_d_df = pd.read_csv(input_tbldir / "Figure4_panelD_SNORD116_plot_input.tsv", sep="\t")
     panel_d_df = panel_d_df[panel_d_df["sample_group"].isin(["AS-DEL", "PWS-DEL"])].copy()
 
-    single_molecule_calls = pd.read_csv(tbldir / "Figure4_single_molecule_CpG_calls.tsv.gz", sep="\t", compression="gzip")
+    single_molecule_calls = pd.read_csv(input_tbldir / "Figure4_single_molecule_CpG_calls.tsv.gz", sep="\t", compression="gzip")
 
     region_summary = build_region_group_summary(panel_c_df, single_molecule_calls)
     control_display_summary = build_control_display_summary(

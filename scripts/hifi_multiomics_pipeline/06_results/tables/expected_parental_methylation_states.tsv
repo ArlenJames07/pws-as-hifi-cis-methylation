@@ -1,0 +1,7 @@
+group	retained_parental_allele	expected_SNRPN_IC_state
+CONTROL	maternal + paternal	one maternal-like methylated haplotype and one paternal-like unmethylated haplotype
+PWS_DEL	maternal	retained maternal-like methylated allele; paternal allele deleted
+AS_DEL	paternal	retained paternal-like unmethylated allele; maternal allele deleted
+PWS_mUPD	maternal + maternal	two maternal-like methylated haplotypes
+PWS_UNKNOWN	unknown	unknown PWS mechanism; inspect IC methylation and CNV/UPD evidence
+UNKNOWN	unknown	unknown

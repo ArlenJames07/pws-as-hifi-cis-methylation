@@ -1,0 +1,8 @@
+method	start	end	width_bp	width_kb	overlap_bp	overlap_pct_shared_core	overlap_pct_called_interval	support_status	source_table	status	color	called_interval
+250-bp windows	22691400	22694350	2950	2.95	2950	79.72972972972973	100.0	partial overlap	Figure3_boundary_sensitivity.tsv	computed	#6f6f6f	chr15:22,691,400-22,694,350
+500-bp windows	22691300	22694400	3100	3.1	3100	83.78378378378379	100.0	partial overlap	Figure3_boundary_sensitivity.tsv	computed	#6f6f6f	chr15:22,691,300-22,694,400
+1-kb windows	22691000	22694700	3700	3.7	3700	100.0	100.0	matches shared core	Figure3_boundary_sensitivity.tsv	computed	#6f6f6f	chr15:22,691,000-22,694,700
+CpG-adaptive windows	22691609	22695739	4130	4.13	3091	83.54054054054055	74.84261501210653	partial overlap	Figure3_boundary_sensitivity.tsv	computed	#6f6f6f	chr15:22,691,609-22,695,739
+Alternative threshold	22691000	22694600	3600	3.6	3600	97.29729729729729	100.0	partial overlap	Figure3_boundary_sensitivity.tsv	computed	#6f6f6f	chr15:22,691,000-22,694,600
+Change-point detection	22691200	22693900	2700	2.7	2700	72.97297297297297	100.0	partial overlap	Figure3_change_point_support.tsv	computed	#4f4f4f	chr15:22,691,200-22,693,900
+Bootstrap resampling	22692300	22693848	1548	1.548	1548	41.83783783783784	100.0	partial overlap	Figure3_bootstrap_support.tsv	computed	#9a7a1b	chr15:22,692,300-22,693,848

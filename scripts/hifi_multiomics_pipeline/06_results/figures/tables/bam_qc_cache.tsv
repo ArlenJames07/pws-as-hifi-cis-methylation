@@ -1,0 +1,12 @@
+sample_id	bam_file	total_HiFi_reads	mean_depth_genome_wide	mean_depth_genome_wide_gc_corrected	mean_depth_chr15	mean_depth_per_haplotype_at_15q11-q13	chr15_length
+001P	/mnt/diskrare/arlenb/08/hiphase_results/bamfiles/08_1_A01_bc2043_001P.bam	4475938	19.516	22.198	17.590	hap1=3.530;hap2=3.286	99753195
+002P	/mnt/diskrare/arlenb/08/hiphase_results/bamfiles/08_1_A01_bc2044_002P.bam	8938223	40.846	43.260	38.163	hap1=6.042;hap2=6.275	99753195
+005P	/mnt/diskrare/arlenb/08/hiphase_results/bamfiles/08_1_A01_bc2047_005P.bam	4193563	18.480	21.346	16.595	hap1=3.080;hap2=2.926	99753195
+006P	/mnt/diskrare/arlenb/08/hiphase_results/bamfiles/08_1_B01_bc2048_006P.bam	4148973	18.242	21.482	16.599	hap1=2.851;hap2=2.785	99753195
+007P	/mnt/diskrare/arlenb/08/hiphase_results/bamfiles/08_1_C01_bc2049_007P.bam	4191100	19.336	21.966	15.431	hap1=0.436;hap2=0.726	99753195
+004P	/mnt/diskrare/arlenb/08/hiphase_results/bamfiles/08_1_C01_bc2046_004P.bam	8815069	41.362	49.836	37.445	hap1=18.394;hap2=18.160	99753195
+013A	/mnt/diskrare/arlenb/08/hiphase_results/bamfiles/08_1_A01_bc2055_013A.bam	3933312	19.552	23.380	17.097	hap1=2.845;hap2=2.903	99753195
+014A	/mnt/diskrare/arlenb/08/hiphase_results/bamfiles/08_1_A01_bc2056_014A.bam	3707793	17.886	21.530	15.804	hap1=3.194;hap2=3.215	99753195
+016A	/mnt/diskrare/arlenb/08/hiphase_results/bamfiles/08_1_B01_bc2058_016A.bam	3609425	17.514	21.512	15.607	hap1=2.731;hap2=2.524	99753195
+017C	/mnt/diskrare/arlenb/08/hiphase_results/bamfiles/08_1_C01_bc2059_017C.bam	8213103	39.014	42.846	36.101	hap1=16.644;hap2=17.032	99753195
+018C	/mnt/diskrare/arlenb/08/hiphase_results/bamfiles/08_1_D01_bc2060_018C.bam	8382913	38.920	43.778	36.078	hap1=16.594;hap2=16.542	99753195

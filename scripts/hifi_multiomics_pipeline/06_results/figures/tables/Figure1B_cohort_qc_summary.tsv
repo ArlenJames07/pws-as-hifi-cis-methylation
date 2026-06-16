@@ -1,0 +1,12 @@
+sample_id	clinical_diagnosis	molecular_mechanism	sex	age_at_sampling	total_HiFi_reads	mean_depth_genome_wide	mean_depth_chr15	mean_depth_per_haplotype_at_15q11-q13	phasing_block_N50_chr15	percent_imprinted_domain_in_phased_block	total_CpGs_called_in_imprinted_domain
+001P	Prader-Willi syndrome	PWS-DEL	F	20	4475938	19.516	17.590	hap1=3.530;hap2=3.286	441975	34.520	71931
+002P	Prader-Willi syndrome	PWS-DEL	M	17	8938223	40.846	38.163	hap1=6.042;hap2=6.275	453242	29.628	71465
+005P	Prader-Willi syndrome	PWS-DEL	F	6	4193563	18.480	16.595	hap1=3.080;hap2=2.926	518660	34.511	71049
+006P	Prader-Willi syndrome	PWS-DEL	M	12	4148973	18.242	16.599	hap1=2.851;hap2=2.785	727124	32.909	70768
+007P	Prader-Willi syndrome	PWS-DEL	M	30	4191100	19.336	15.431	hap1=0.436;hap2=0.726	443162	6.091	68493
+004P	Prader-Willi syndrome	PWS-mUPD	F	15	8815069	41.362	37.445	hap1=18.394;hap2=18.160	388083	85.098	73563
+013A	Angelman syndrome	AS-DEL	F	7	3933312	19.552	17.097	hap1=2.845;hap2=2.903	424330	28.487	69936
+014A	Angelman syndrome	AS-DEL	F	12	3707793	17.886	15.804	hap1=3.194;hap2=3.215	469149	34.472	70102
+016A	Angelman syndrome	AS-DEL			3609425	17.514	15.607	hap1=2.731;hap2=2.524	455954	33.142	70554
+017C	Unaffected control	Control	M	24	8213103	39.014	36.101	hap1=16.644;hap2=17.032	549664	82.549	73310
+018C	Unaffected control	Control	F	25	8382913	38.920	36.078	hap1=16.594;hap2=16.542	447932	84.833	73254
