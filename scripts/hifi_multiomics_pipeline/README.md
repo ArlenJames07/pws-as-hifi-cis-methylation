@@ -12,19 +12,18 @@ This folder groups the current long-read analysis scripts into a simple repo-sty
    HiFi CNV calling from phased BAMs and phased variant calls.
 4. `04_haplotype_methylation/pbcpgtools.py`
    Haplotype-aware CpG methylation calling from phased BAMs.
-5. `05_figures/phase1_figure1_v2.py`
-   Figure generation for the manuscript, including `Figure1_improved.{png,pdf,svg}`, `Figure2_reciprocal_cis_architecture_improved.{png,pdf,svg}`, `Figure3_boundary_mapping_improved.{png,pdf,svg}`, `Figure_SNORD116_single_molecule_architecture.{png,pdf,svg}`, and `Figure5_v7.{png,pdf}`.
+5. `05_figures/FIGURE_1.py` to `05_figures/FIGURE_5.py`
+   Self-contained canonical figure scripts for the manuscript, including `Figure1_improved.{png,pdf,svg}`, `Figure2_reciprocal_cis_architecture_improved.{png,pdf,svg}`, `Figure3_boundary_mapping_improved.{png,pdf,svg}`, `Figure4_per_molecule_cis_architecture.{png,pdf}`, `Figure_SNORD116_single_molecule_architecture.{png,pdf,svg}`, and `Figure5_v7.{png,pdf}`.
 
 ## Notes
 
-- The files in this folder are wrappers that run the existing source scripts.
+- The canonical `FIGURE_1.py` to `FIGURE_5.py` files are self-contained copies or vendored merges of the original figure logic.
 - Original script locations remain unchanged:
   - `/home/rare/arlen/scripts/SV_calling/pbsv_discover.py`
   - `/home/rare/arlen/scripts/Hiphase/hiphase.py`
   - `/home/rare/arlen/scripts/SV_calling/CNV.py`
   - `/home/rare/arlen/scripts/methylation_genomes/pbcpgtools.py`
   - `/home/rare/arlen/scripts/paper_vf/phase1_figure1_v2.py`
-  - `/home/rare/arlen/scripts/paper_vf/q1_pws_as_master_pipeline.py`
   - `/home/rare/arlen/scripts/paper_vf/paper_vf_phase2_reciprocal_cis_architecture.py`
   - `/home/rare/arlen/scripts/paper_vf/create_figure2_reciprocal_cis_architecture_improved.py`
   - `/home/rare/arlen/scripts/paper_vf/phase3_boundary_mapping.py`

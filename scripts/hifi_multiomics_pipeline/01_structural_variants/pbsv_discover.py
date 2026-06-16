@@ -6,7 +6,6 @@ reference_t2t="/home/rare/arlen/reference/chm13v22.fasta"
 mnt_diskrare="/mnt/diskrare/arlenb"
 smrtlink="/home/rare/programs/smrtlink/smrtlink/smrtcmds/bin"
 genome_t2t="t2t"
-genome_hg38="hg38"
 output="/home/rare/arlen/outputs"
 tandem_repeats="/home/rare/arlen/reference/human_T2T_CHM13v2.trf.bed"
 

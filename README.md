@@ -71,12 +71,18 @@ pws-as-hifi-cis-methylation/
         │   └── pbcpgtools.py
         └── 05_figures/
             ├── README.md
+            ├── FIGURE_1.py
+            ├── FIGURE_2.py
+            ├── FIGURE_3.py
+            ├── FIGURE_4.py
+            ├── FIGURE_5.py
             ├── q1_pws_as_master_pipeline.py
             ├── phase1_figure1_v2.py
             ├── paper_vf_phase2_reciprocal_cis_architecture.py
             ├── create_figure2_reciprocal_cis_architecture_improved.py
             ├── phase3_boundary_mapping.py
             ├── phase4_per_molecule_cis_architecture.py
+            ├── figure_snord116_single_molecule_architecture.py
             ├── update_figure4_manuscript_layout.py
             └── make_figure5_structural_context_v2.py
 ```
