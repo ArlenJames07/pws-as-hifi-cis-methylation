@@ -7,7 +7,7 @@ def pbcpgtools():
     ruta_salida="/home/rare/arlen/outputs/methylation/genomes_2"
     os.makedirs(ruta_salida, exist_ok=True)
     for x in os.listdir(ruta_bam_alineados):
-        if x.endswith("08_1_A01_bc2043_001P.bam"):
+        if x.endswith(".bam"):
             file=os.path.join(ruta_bam_alineados,x)
             basename=os.path.basename(file).replace(".bam","")
             cmd=f"{programa} --bam {file} --output-prefix {ruta_salida}/{basename} --model {modelo} --threads 32"
