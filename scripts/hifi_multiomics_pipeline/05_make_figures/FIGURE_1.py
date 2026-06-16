@@ -176,7 +176,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cnv-dir", default="/home/rare/arlen/outputs/Variants/Structural_variants/hifi_cnv")
     parser.add_argument("--gtf", default="/home/rare/arlen/reference/chm13v22.sorted.gtf")
     parser.add_argument("--metadata", default="/home/rare/arlen/outputs/methylation/metadata/metadata_methylation.csv")
-    parser.add_argument("--outdir", default="/home/rare/arlen/pws-as-hifi-cis-methylation/scripts/hifi_multiomics_pipeline/06_results")
+    parser.add_argument("--outdir", default="/home/rare/arlen/pws-as-hifi-cis-methylation/scripts/hifi_multiomics_pipeline/06_results/figures")
     parser.add_argument("--skip-bam-qc", action="store_true", help="Reuse existing BAM QC cache when possible.")
     return parser.parse_args()
 
