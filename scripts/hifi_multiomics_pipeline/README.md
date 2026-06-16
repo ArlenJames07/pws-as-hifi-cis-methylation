@@ -14,6 +14,7 @@ This folder groups the current long-read analysis scripts into a simple repo-sty
    Haplotype-aware CpG methylation calling from phased BAMs.
 5. `05_figures/FIGURE_1.py` to `05_figures/FIGURE_5.py`
    Self-contained canonical figure scripts for the manuscript, including `Figure1_improved.{png,pdf,svg}`, `Figure2_reciprocal_cis_architecture_improved.{png,pdf,svg}`, `Figure3_boundary_mapping_improved.{png,pdf,svg}`, `Figure4_per_molecule_cis_architecture.{png,pdf}`, `Figure_SNORD116_single_molecule_architecture.{png,pdf,svg}`, and `Figure5_v7.{png,pdf}`.
+6. Results
 
 ## Notes
 
