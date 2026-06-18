@@ -1,2 +1,0 @@
-interval_source	control_signal_mode	control_signal_formula	validated_interval_tolerance_bp	validated_override_requested
-computed_from_boundary_calling	absolute	|maternal - paternal|	1000	False

@@ -1,5 +1,0 @@
-cohort	entry_change_point	exit_change_point	entry_shift_vs_primary_start_bp	exit_shift_vs_primary_end_bp	method
-Control	22691200	22693900	200	-800	rolling-mean derivative maxima/minima
-PWS_DEL	22691200	22694000	200	-700	rolling-mean derivative maxima/minima
-AS_DEL	22691100	22694300	100	-400	rolling-mean derivative maxima/minima
-Consensus	22691200	22693900	200	-800	latest entry / earliest exit across cohort-specific derivative change points

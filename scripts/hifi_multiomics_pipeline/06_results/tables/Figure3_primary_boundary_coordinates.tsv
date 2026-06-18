@@ -1,4 +1,0 @@
-boundary_source	cohort	consensus_index	entry_boundary	exit_boundary	entry_confidence	exit_confidence	distance_to_control_entry_bp	distance_to_control_exit_bp	convergence_flag
-Control	Control	47	22690600.0	22696850.0	high	high	0.0	0.0	control_primary
-PWS_DEL	PWS_DEL	2	22690900.0	22694700.0	group_call	group_call	300.0	-2150.0	convergent
-AS_DEL	AS_DEL	1	22691000.0	22694800.0	group_call	group_call	400.0	-2050.0	convergent

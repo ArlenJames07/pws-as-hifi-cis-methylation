@@ -1,4 +1,0 @@
-chrom	start	end	name	parent	gene	source	within_phase2_window	plot_start	plot_end
-chr15	21381660	21383043	ICR_887^#	S	MAGEL2	/home/rare/arlen/reference/ICR_t2t.bed	True	21381660	21383043
-chr15	21421011	21421062	ICR_888#	S	NDN	/home/rare/arlen/reference/ICR_t2t.bed	True	21421011	21421062
-chr15	22691258	22693494	ICR_893*^	M	SNHG14|SNRPN|SNURF	/home/rare/arlen/reference/ICR_t2t.bed	True	22691258	22693494

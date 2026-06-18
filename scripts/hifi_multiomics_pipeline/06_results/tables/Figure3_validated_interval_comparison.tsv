@@ -1,5 +1,0 @@
-source	computed_start	computed_end	validated_start	validated_end	start_delta_bp	end_delta_bp	within_tolerance
-Control	22690600	22696850	22690600	22696850	0	0	True
-PWS_DEL	22690900	22694700	22690900	22694700	0	0	True
-AS_DEL	22691000	22694800	22691000	22694800	0	0	True
-Consensus	22691000	22694700	22691000	22694700	0	0	True

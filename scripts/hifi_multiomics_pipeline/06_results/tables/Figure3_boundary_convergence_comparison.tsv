@@ -1,6 +1,0 @@
-cohort	segment_index	entry_boundary	exit_boundary	distance_to_control_entry_bp	distance_to_control_exit_bp	discrepancy_flag
-AS_DEL	1	22691000	22694800	400.0	-2050.0	convergent
-AS_DEL	2	22692200	22694800	1600.0	-2050.0	convergent
-PWS_DEL	1	22509000	22511300	-181600.0	-185550.0	flag
-PWS_DEL	2	22690900	22694700	300.0	-2150.0	convergent
-PWS_DEL	3	24696400	24697900	2005800.0	2001050.0	flag

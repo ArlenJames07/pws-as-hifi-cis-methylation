@@ -1,4 +1,0 @@
-name	chrom	position	position_mb	in_plotted_range	source_script	source_variable
-BP1	chr15	20940000	20.94	True	/home/rare/arlen/scripts/Daniela/pws_chr15_hifi_deletion_analysis.py	PWS_BREAKPOINTS
-BP2	chr15	21070000	21.07	True	/home/rare/arlen/scripts/Daniela/pws_chr15_hifi_deletion_analysis.py	PWS_BREAKPOINTS
-BP3	chr15	26050000	26.05	True	/home/rare/arlen/scripts/Daniela/pws_chr15_hifi_deletion_analysis.py	PWS_BREAKPOINTS

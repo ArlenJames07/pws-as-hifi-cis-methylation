@@ -1,4 +1,0 @@
-feature	chrom	start	end	window_size
-phase2_fixed_domain	chr15	17600000	28000000	1000.0
-PWS_IC_proxy_SNRPN	chr15	22555288	22565288	
-AS_IC_prompt_approx	chr15	24910000	24930000	
