@@ -1,0 +1,12 @@
+sample_id,clinical_diagnosis,molecular_mechanism,sex,age_at_sampling
+001P,Prader-Willi syndrome,PWS-DEL,,
+002P,Prader-Willi syndrome,PWS-DEL,,
+005P,Prader-Willi syndrome,PWS-DEL,,
+006P,Prader-Willi syndrome,PWS-DEL,,
+007P,Prader-Willi syndrome,PWS-DEL,,
+004P,Prader-Willi syndrome,PWS-mUPD,,
+013A,Angelman syndrome,AS-DEL,,
+014A,Angelman syndrome,AS-DEL,,
+016A,Angelman syndrome,AS-DEL,,
+017C,Unaffected control,Control,,
+018C,Unaffected control,Control,,

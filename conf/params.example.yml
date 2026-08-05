@@ -1,0 +1,22 @@
+input: assets/samplesheet.csv
+outdir: results
+
+# Reference resources (T2T-CHM13v2.0)
+reference: /absolute/path/to/chm13v2.0.fa
+reference_fai: /absolute/path/to/chm13v2.0.fa.fai
+tandem_repeats: /absolute/path/to/chm13v2.0.trf.bed
+cnv_exclude: /absolute/path/to/cnv.exclude.bed
+cpg_model: /absolute/path/to/pileup_calling_model.v1.tflite
+
+# Optional manuscript-figure inputs
+run_figures: false
+gtf: /absolute/path/to/chm13v2.0.gtf
+metadata: assets/metadata.csv
+icr_bed: /absolute/path/to/icr.bed
+segdup_bed: /absolute/path/to/segmental_duplications.bed
+imprintome_bed: /absolute/path/to/imprinted_regions.bed
+repeats_bed: /absolute/path/to/repeatmasker.bed
+
+# Figures 4 and 5 are render-only and require their original precomputed tables.
+figure4_tables: null
+figure5_tables: null

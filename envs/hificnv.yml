@@ -1,0 +1,4 @@
+name: pws-as-hificnv
+channels: [conda-forge, bioconda]
+dependencies:
+  - hificnv=1.0.1

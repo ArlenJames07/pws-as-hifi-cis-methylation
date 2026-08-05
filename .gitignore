@@ -1,0 +1,43 @@
+# Nextflow runtime state
+.nextflow*
+work/
+
+# Pipeline results (human genomic outputs must not be committed)
+results/
+results-test/
+
+# Python/editor caches
+__pycache__/
+*.py[cod]
+.idea/
+.vscode/
+
+# Local data and secrets
+/data/
+*.local.yml
+*.local.yaml
+samplesheet.local.csv
+*.fastq
+*.fastq.gz
+*.fq
+*.fq.gz
+*.fa
+*.fasta
+*.fna
+*.fa.fai
+*.fasta.fai
+*.dict
+*.tflite
+*.bam
+*.bai
+*.cram
+*.crai
+*.vcf
+*.vcf.gz
+*.vcf.gz.tbi
+*.bed.gz
+
+# Keep the deliberately tiny, non-genomic stub fixtures.
+!tests/data/reference.fa
+!tests/data/reference.fa.fai
+!tests/data/model.tflite

@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ArlenJames07/pws-as-hifi-cis-methylation/blob/main/nextflow_schema.json",
+  "title": "PWS/AS PacBio HiFi pipeline parameters",
+  "description": "Portable inputs for variant, phasing, CNV, methylation, and manuscript-figure analysis.",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "input": {
+      "type": "string",
+      "format": "file-path",
+      "description": "CSV with sample and bam columns."
+    },
+    "outdir": {
+      "type": "string",
+      "default": "results",
+      "description": "Published output directory."
+    },
+    "reference": {
+      "type": "string",
+      "format": "file-path",
+      "description": "T2T-CHM13v2.0 FASTA."
+    },
+    "reference_fai": {
+      "type": "string",
+      "format": "file-path",
+      "description": "FASTA index. Defaults to the reference path plus .fai."
+    },
+    "tandem_repeats": {
+      "type": "string",
+      "format": "file-path",
+      "description": "Tandem-repeat BED used by pbsv discover."
+    },
+    "cnv_exclude": {
+      "type": "string",
+      "format": "file-path",
+      "description": "HiFiCNV exclude BED."
+    },
+    "cpg_model": {
+      "type": "string",
+      "format": "file-path",
+      "description": "pb-CpG-tools pileup model."
+    },
+    "run_figures": {
+      "type": "boolean",
+      "default": false,
+      "description": "Generate Figures 1-3 from workflow outputs."
+    },
+    "gtf": {
+      "type": "string",
+      "format": "file-path",
+      "description": "T2T-CHM13v2.0 gene annotation GTF; required for figure generation."
+    },
+    "metadata": {
+      "type": "string",
+      "format": "file-path",
+      "description": "Non-identifiable cohort metadata CSV; required for Figures 1-2."
+    },
+    "icr_bed": {
+      "type": "string",
+      "format": "file-path",
+      "description": "Imprinting-control-region BED; required for Figures 2-3."
+    },
+    "segdup_bed": {
+      "type": "string",
+      "format": "file-path",
+      "description": "Segmental-duplication BED; required for Figures 2-3."
+    },
+    "imprintome_bed": {
+      "type": "string",
+      "format": "file-path",
+      "description": "Genome-wide imprinted-region BED; required for Figure 3."
+    },
+    "repeats_bed": {
+      "type": "string",
+      "format": "file-path",
+      "description": "RepeatMasker BED; required for Figure 3."
+    },
+    "figure4_tables": {
+      "type": "string",
+      "format": "directory-path",
+      "description": "Optional directory of precomputed Figure4_*.tsv tables."
+    },
+    "figure5_tables": {
+      "type": "string",
+      "format": "directory-path",
+      "description": "Optional directory of precomputed Figure5*.tsv tables."
+    },
+    "deepvariant_bin": {
+      "type": "string",
+      "default": "run_deepvariant",
+      "description": "DeepVariant launcher on PATH or an absolute executable path."
+    },
+    "pbcpgtools_bin": {
+      "type": "string",
+      "default": "aligned_bam_to_cpg_scores",
+      "description": "pb-CpG-tools executable on PATH or an absolute path."
+    },
+    "min_sv_length": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 50,
+      "description": "Minimum absolute SVLEN retained after pbsv calling; BND records are retained."
+    },
+    "publish_mode": {
+      "type": "string",
+      "enum": ["copy", "link", "symlink", "rellink", "move"],
+      "default": "copy"
+    }
+  },
+  "required": ["input", "reference", "tandem_repeats", "cnv_exclude", "cpg_model"]
+}

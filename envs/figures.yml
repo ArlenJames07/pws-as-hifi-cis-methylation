@@ -1,0 +1,11 @@
+name: pws-as-figures
+channels: [conda-forge, bioconda]
+dependencies:
+  - python=3.10
+  - matplotlib=3.9
+  - numpy=1.26
+  - pandas=2.2
+  - pysam=0.22
+  - scipy=1.14
+  - seaborn=0.13
+  - samtools=1.21

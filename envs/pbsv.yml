@@ -1,0 +1,5 @@
+name: pws-as-pbsv
+channels: [conda-forge, bioconda]
+dependencies:
+  - pbsv=2.10.0
+  - bcftools=1.21

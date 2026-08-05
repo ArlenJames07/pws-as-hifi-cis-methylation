@@ -1,0 +1,6 @@
+name: pws-as-hiphase
+channels: [conda-forge, bioconda]
+dependencies:
+  - hiphase=1.4.5
+  - bcftools=1.21
+  - samtools=1.21

@@ -1,0 +1,5 @@
+name: pws-as-pbmm2
+channels: [conda-forge, bioconda]
+dependencies:
+  - pbmm2=1.17.0
+  - samtools=1.21

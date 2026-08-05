@@ -1,0 +1,5 @@
+name: pws-as-htslib
+channels: [conda-forge, bioconda]
+dependencies:
+  - bcftools=1.21
+  - samtools=1.21
