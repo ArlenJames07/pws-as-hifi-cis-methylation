@@ -129,18 +129,6 @@ nextflow run main.nf -profile slurm,conda,docker -params-file params.local.yml -
 
 View the command-line summary with `nextflow run main.nf --help`.
 
-## Manuscript figures
-
-Figures 1–3 can run after the core workflow by setting `run_figures: true` and
-providing `gtf`, `metadata`, `icr_bed`, `segdup_bed`, `imprintome_bed`, and
-`repeats_bed` in the parameter file.
-
-Figures 4 and 5 are render-only in this repository. Their scripts require
-precomputed `Figure4_*.tsv` or `Figure5*.tsv` tables that the current repository
-does not generate. Supply those directories with `figure4_tables` and
-`figure5_tables`; otherwise those two processes are skipped. This distinction
-prevents the workflow from claiming that missing upstream analyses are
-reproducible.
 
 ## Output structure
 
