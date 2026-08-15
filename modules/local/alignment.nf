@@ -16,7 +16,7 @@ process ALIGN_HIFI {
 
     script:
     """
-    pbmm2 align \
+    ${params.pbmm2_bin} align \
         ${reference} \
         ${input_bam} \
         ${sample}.aligned.bam \
@@ -25,12 +25,12 @@ process ALIGN_HIFI {
         --log-level INFO \
         --num-threads ${task.cpus}
 
-    samtools index -@ ${task.cpus} ${sample}.aligned.bam
+    ${params.samtools_bin} index -@ ${task.cpus} ${sample}.aligned.bam
 
     cat > ${sample}.alignment.versions.yml <<-END_VERSIONS
     "${task.process}":
-      pbmm2: "\$(pbmm2 --version 2>&1 | head -n 1)"
-      samtools: "\$(samtools --version | head -n 1)"
+      pbmm2: "\$(${params.pbmm2_bin} --version 2>&1 | head -n 1)"
+      samtools: "\$(${params.samtools_bin} --version | head -n 1)"
     END_VERSIONS
     """
 

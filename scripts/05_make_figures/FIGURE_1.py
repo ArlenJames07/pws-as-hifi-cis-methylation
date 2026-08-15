@@ -54,6 +54,12 @@ COHORT = [
     ("006P", "Prader-Willi syndrome", "PWS-DEL"),
     ("007P", "Prader-Willi syndrome", "PWS-DEL"),
     ("004P", "Prader-Willi syndrome", "PWS-mUPD"),
+    ("008D", "DiGeorge syndrome", "DiGeorge"),
+    ("009D", "DiGeorge syndrome", "DiGeorge"),
+    ("010D", "DiGeorge syndrome", "DiGeorge"),
+    ("011D", "DiGeorge syndrome", "DiGeorge"),
+    ("012D", "DiGeorge syndrome", "DiGeorge"),
+    ("015D", "DiGeorge syndrome", "DiGeorge"),
     ("013A", "Angelman syndrome", "AS-DEL"),
     ("014A", "Angelman syndrome", "AS-DEL"),
     ("016A", "Angelman syndrome", "AS-DEL"),
@@ -61,41 +67,47 @@ COHORT = [
     ("018C", "Unaffected control", "Control"),
 ]
 
-MECHANISM_ORDER = {"PWS-DEL": 0, "PWS-mUPD": 1, "AS-DEL": 2, "Control": 3}
+MECHANISM_ORDER = {"PWS-DEL": 0, "PWS-mUPD": 1, "AS-DEL": 2, "DiGeorge": 3, "Control": 4}
 MECHANISM_COLORS = {
     "PWS-DEL": "#C0392B",
     "PWS-mUPD": "#2E86C1",
     "AS-DEL": "#8E44AD",
+    "DiGeorge": "#D89000",
     "Control": "#7F8C8D",
 }
 MECHANISM_SAMPLE_PREFIX = {
     "PWS-DEL": "PW",
     "PWS-mUPD": "UPD",
     "AS-DEL": "AS",
+    "DiGeorge": "DG",
     "Control": "CTRL",
 }
 EXPECTED_SIGNAL = {
     "PWS-DEL": "Retained maternal-pattern only",
     "PWS-mUPD": "Both haplotypes maternal-pattern",
     "AS-DEL": "Retained paternal-pattern only",
+    "DiGeorge": "Canonical chr15 maternal/paternal state; 22q11.2 deletion is outside this locus",
     "Control": "Canonical maternal high / paternal low",
 }
 GROUP_EXPECTED_CONFIG = {
     "PWS-DEL": "maternal retained,\npaternal absent",
     "PWS-mUPD": "maternal +\nmaternal",
     "AS-DEL": "maternal absent,\npaternal retained",
+    "DiGeorge": "maternal + paternal\nat chr15",
     "Control": "maternal +\npaternal",
 }
 GROUP_EXPECTED_STATE_CODES = {
     "PWS-DEL": ("M", "absent"),
     "PWS-mUPD": ("M", "M"),
     "AS-DEL": ("absent", "P"),
+    "DiGeorge": ("M", "P"),
     "Control": ("M", "P"),
 }
 GROUP_INTERPRETATIONS = {
     "PWS-DEL": "paternal deletion",
     "PWS-mUPD": "maternal UPD\n(duplicated maternal state)",
     "AS-DEL": "maternal deletion",
+    "DiGeorge": "biparental chr15 state\n(22q11.2 deletion outside locus)",
     "Control": "canonical biparental state",
 }
 STATE_COLORS = {
@@ -563,7 +575,12 @@ def build_assignments(sample_files: dict[str, dict[str, Path | None]]) -> tuple[
                 ("hap2", stats["hap2"], "hap2.bed"),
             ]
             expected = "both maternal-pattern" if mechanism == "PWS-mUPD" else "one maternal-pattern and one paternal-pattern"
-            note = "PWS-mUPD: parental origin not assigned" if mechanism == "PWS-mUPD" else "Control: haplotypes assigned by PWS-IC methylation"
+            if mechanism == "PWS-mUPD":
+                note = "PWS-mUPD: parental origin not assigned"
+            elif mechanism == "DiGeorge":
+                note = "DiGeorge: chr15 haplotypes assigned by PWS-IC methylation; 22q11.2 deletion is outside this locus"
+            else:
+                note = "Control: haplotypes assigned by PWS-IC methylation"
 
         for label, bed_stats, source in rows_for_sample:
             pattern = methylation_pattern(bed_stats)
@@ -613,7 +630,7 @@ def build_per_cpg_contrast(
     rows: list[dict[str, Any]] = []
     for sample_id, _clinical, mechanism in COHORT:
         sample_stats = stats_by_sample[sample_id]
-        if mechanism == "Control":
+        if mechanism in {"Control", "DiGeorge"}:
             assigned = assignment_by_sample[sample_id]
             maternal_label = next((r["haplotype_label"] for r in assigned if r["parental_assignment"] == "maternal"), None)
             paternal_label = next((r["haplotype_label"] for r in assigned if r["parental_assignment"] == "paternal"), None)

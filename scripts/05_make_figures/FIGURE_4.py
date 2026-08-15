@@ -66,6 +66,7 @@ TEXT_MUTED = "#5C5C5C"
 
 GROUP_PALETTE = {
     "Control": "#6F6F6F",
+    "DiGeorge": "#D89000",
     "AS-DEL": "#157A73",
     "PWS-DEL": "#B56D2D",
     "PWS-mUPD": "#7258A7",
@@ -100,7 +101,7 @@ ZOOM_HIGHLIGHT_COLOR = "#2F2F2F"
 ZOOM_CONNECTOR_COLOR = "#464646"
 
 PANEL_C_REGION_ORDER = ["SNRPN/PWS-IC", "SNORD116", "Downstream control"]
-PANEL_C_GROUP_ORDER = ["Control", "AS-DEL", "PWS-DEL", "PWS-mUPD"]
+PANEL_C_GROUP_ORDER = ["Control", "DiGeorge", "AS-DEL", "PWS-DEL", "PWS-mUPD"]
 PANEL_D_ORDER = ["AS-DEL retained paternal", "PWS-DEL retained maternal"]
 CONTROL_PANEL_MAP = {
     "A": ("Control paternal", "Paternal-like control molecules"),

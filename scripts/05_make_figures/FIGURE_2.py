@@ -78,6 +78,7 @@ DEFAULT_GROUPS = {
     "PWS_DEL": ["001P", "002P", "005P", "006P", "007P"],
     "PWS_mUPD": ["004P"],
     "AS_DEL": ["013A", "014A", "016A"],
+    "DIGEORGE": ["008D", "009D", "010D", "011D", "012D", "015D"],
     "CONTROL": ["017C", "018C"],
 }
 
@@ -107,6 +108,10 @@ EXPECTED_STATES = {
     "PWS_mUPD": {
         "retained_parental_allele": "maternal + maternal",
         "expected_SNRPN_IC_state": "two maternal-like methylated haplotypes",
+    },
+    "DIGEORGE": {
+        "retained_parental_allele": "maternal + paternal at chr15",
+        "expected_SNRPN_IC_state": "biparental chr15 state; the disease deletion is on chr22",
     },
     "PWS_UNKNOWN": {
         "retained_parental_allele": "unknown",
@@ -215,6 +220,8 @@ def normalize_group_from_text(sample: str, text: str) -> str:
     """Infer one of the manuscript groups from free-text metadata plus sample code."""
     sample = str(sample)
     t = str(text).upper().replace("-", "_").replace(" ", "_")
+    if "DIGEORGE" in t or "22Q11" in t or sample.endswith("D"):
+        return "DIGEORGE"
     if any(x in t for x in ["CONTROL", "CTRL", "HEALTHY", "UNAFFECTED", "UNAFF", "NORMAL"]):
         return "CONTROL"
     if "ANGELMAN" in t or re.search(r"(^|_)AS(_|$)", t):
@@ -304,7 +311,7 @@ def load_metadata_table(metadata_path: Optional[Path], outdir: Optional[Path] = 
     # Update runtime group dictionary in-place so all existing calls use metadata-aware labels.
     grouped = meta.groupby("group")["sample"].apply(list).to_dict() if not meta.empty else {}
     for g, codes in grouped.items():
-        if g in {"CONTROL", "PWS_DEL", "PWS_mUPD", "AS_DEL"}:
+        if g in {"CONTROL", "PWS_DEL", "PWS_mUPD", "AS_DEL", "DIGEORGE"}:
             DEFAULT_GROUPS[g] = sorted(set(codes))
 
     if outdir is not None:
@@ -836,7 +843,7 @@ def plot_ic_profiles(ax, single_cpg: pd.DataFrame, ic_start: int, ic_end: int):
     x = single_cpg[single_cpg["layer"].isin(["hap1", "hap2"])].copy()
     if x.empty:
         x = single_cpg.copy()
-    groups = ["CONTROL", "PWS_DEL", "AS_DEL", "PWS_mUPD"]
+    groups = ["CONTROL", "DIGEORGE", "PWS_DEL", "AS_DEL", "PWS_mUPD"]
     for g in groups:
         z = x[x["group"] == g]
         if z.empty:
@@ -1589,6 +1596,7 @@ PHASE2_WINDOW = 1_000
 AS_IC_CENTER = 24_920_000
 DEFAULT_PHASE2_SAMPLES = [
     "001P", "002P", "004P", "005P", "006P", "007P",
+    "008D", "009D", "010D", "011D", "012D", "015D",
     "013A", "014A", "016A", "017C", "018C",
 ]
 
@@ -1672,7 +1680,7 @@ def phase_samples_from_metadata(file_table: pd.DataFrame, requested: Optional[Li
     if requested:
         present = set(file_table["sample"].unique())
         return [s for s in requested if s in present]
-    wanted_groups = {"CONTROL", "PWS_DEL", "PWS_mUPD", "AS_DEL"}
+    wanted_groups = {"CONTROL", "PWS_DEL", "PWS_mUPD", "AS_DEL", "DIGEORGE"}
     samples = []
     for sample in sorted(file_table["sample"].unique()):
         if sample_group(sample, DEFAULT_GROUPS) in wanted_groups:

@@ -57,6 +57,12 @@ COHORT = [
     ("006P", "Prader-Willi syndrome", "PWS_DEL"),
     ("007P", "Prader-Willi syndrome", "PWS_DEL"),
     ("004P", "Prader-Willi syndrome", "PWS_mUPD"),
+    ("008D", "DiGeorge syndrome", "DIGEORGE"),
+    ("009D", "DiGeorge syndrome", "DIGEORGE"),
+    ("010D", "DiGeorge syndrome", "DIGEORGE"),
+    ("011D", "DiGeorge syndrome", "DIGEORGE"),
+    ("012D", "DiGeorge syndrome", "DIGEORGE"),
+    ("015D", "DiGeorge syndrome", "DIGEORGE"),
     ("013A", "Angelman syndrome", "AS_DEL"),
     ("014A", "Angelman syndrome", "AS_DEL"),
     ("016A", "Angelman syndrome", "AS_DEL"),
@@ -67,11 +73,12 @@ COHORT = [
 CHROM = "chr15"
 PLOT_START = 17_000_000
 PLOT_END = 33_000_000
-PANEL_GROUP_ORDER = ["PWS_DEL", "AS_DEL", "PWS_mUPD", "CONTROL"]
+PANEL_GROUP_ORDER = ["PWS_DEL", "AS_DEL", "PWS_mUPD", "DIGEORGE", "CONTROL"]
 GROUP_LABEL = {
     "PWS_DEL": "PWS-DEL",
     "AS_DEL": "AS-DEL",
     "PWS_mUPD": "PWS-UPD",
+    "DIGEORGE": "DiGeorge",
     "CONTROL": "Control",
 }
 METH_GROUP_LABEL = {
@@ -83,18 +90,21 @@ SAMPLE_DISPLAY_PREFIX = {
     "PWS_DEL": "PW",
     "AS_DEL": "AS",
     "PWS_mUPD": "UPD",
+    "DIGEORGE": "DG",
     "CONTROL": "CTRL",
 }
 GROUP_COLORS = {
     "PWS_DEL": "#c03a3a",
     "AS_DEL": "#2f6fb0",
     "PWS_mUPD": "#7a52b3",
+    "DIGEORGE": "#d89000",
     "CONTROL": "#4d4d4d",
 }
 GROUP_FILLS = {
     "PWS_DEL": "#f4c7c7",
     "AS_DEL": "#cfe0f4",
     "PWS_mUPD": "#e1d5f5",
+    "DIGEORGE": "#f7dfac",
     "CONTROL": "#d9d9d9",
 }
 SV_METRIC_COLORS = {
@@ -222,6 +232,8 @@ def load_input_inventory(path: Path) -> dict[str, SampleInfo]:
             group = "AS_DEL"
         elif group == "PWS-UPD":
             group = "PWS_mUPD"
+        elif group in {"DiGeorge", "DIGEORGE", "22q11.2 deletion"}:
+            group = "DIGEORGE"
         elif group == "Control":
             group = "CONTROL"
         samples[str(row["sample_id"])] = SampleInfo(
@@ -244,6 +256,8 @@ def parse_group(group: str) -> str:
         return "AS_DEL"
     if group == "PWS-UPD":
         return "PWS_mUPD"
+    if str(group).upper().replace("-", "") in {"DIGEORGE", "22Q11.2DELETION", "22Q11DELETION"}:
+        return "DIGEORGE"
     if group == "Control":
         return "CONTROL"
     return group
@@ -330,7 +344,18 @@ def iter_group_partitions(indices: tuple[int, ...], group_sizes: Sequence[int]) 
             yield [tuple(combo)] + tail
 
 
-def exact_permutation_kruskal(values: Sequence[float], labels: Sequence[str]) -> tuple[float, float]:
+def permutation_kruskal(
+    values: Sequence[float],
+    labels: Sequence[str],
+    max_exact_partitions: int = 100_000,
+    monte_carlo_permutations: int = 100_000,
+) -> tuple[float, float, str, int]:
+    """Reproducible Kruskal-Wallis permutation test.
+
+    Enumerate all label partitions for small cohorts. For the 17-sample cohort,
+    which includes six DiGeorge samples, use a fixed-seed Monte Carlo test so
+    the analysis remains computationally practical and reproducible.
+    """
     vals = np.asarray(values, dtype=float)
     labs = np.asarray(labels)
     first_seen: list[str] = []
@@ -340,6 +365,16 @@ def exact_permutation_kruskal(values: Sequence[float], labels: Sequence[str]) ->
             first_seen.append(label)
             group_sizes.append(int((labs == label).sum()))
     observed = kruskal_h(vals, labs)
+    n_partitions = math.factorial(len(vals)) // math.prod(math.factorial(size) for size in group_sizes)
+    if n_partitions > max_exact_partitions:
+        rng = np.random.default_rng(1729)
+        ge = 0
+        for _ in range(monte_carlo_permutations):
+            stat = kruskal_h(vals, rng.permutation(labs))
+            ge += int(stat >= observed - 1e-12)
+        pvalue = (ge + 1) / float(monte_carlo_permutations + 1)
+        return observed, pvalue, "Monte Carlo permutation (seed=1729)", monte_carlo_permutations
+
     ge = 0
     total = 0
     index_order = tuple(range(len(vals)))
@@ -351,7 +386,7 @@ def exact_permutation_kruskal(values: Sequence[float], labels: Sequence[str]) ->
         stat = kruskal_h(vals, perm_labels)
         ge += int(stat >= observed - 1e-12)
         total += 1
-    return observed, ge / float(total)
+    return observed, ge / float(total), "exact permutation", total
 
 
 def epsilon_squared(h_stat: float, n: int, k: int) -> float:
@@ -848,15 +883,19 @@ def prepare_cnv_burden(cnv_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame
     burden["display_label"] = burden["sample_id"].map(DISPLAY_SAMPLE_LABELS)
     rows = []
     for metric in ["nonchr15_large_cnv_count", "nonchr15_large_cnv_total_mb"]:
-        observed_h, pvalue = exact_permutation_kruskal(burden[metric].to_numpy(), burden["group"].to_numpy())
+        observed_h, pvalue, permutation_method, n_permutations = permutation_kruskal(
+            burden[metric].to_numpy(), burden["group"].to_numpy()
+        )
         rows.append(
             {
                 "metric": metric,
                 "n_samples": int(len(burden)),
-                "n_groups": 4,
+                "n_groups": len(PANEL_GROUP_ORDER),
                 "exact_permutation_p": pvalue,
+                "permutation_method": permutation_method,
+                "n_permutations": n_permutations,
                 "kruskal_h": observed_h,
-                "epsilon_squared": epsilon_squared(observed_h, len(burden), 4),
+                "epsilon_squared": epsilon_squared(observed_h, len(burden), len(PANEL_GROUP_ORDER)),
             }
         )
     stats_df = pd.DataFrame(rows)
@@ -877,15 +916,19 @@ def prepare_sv_burden(sv_burden_df: pd.DataFrame, sv_calls_df: pd.DataFrame) -> 
     metrics = ["DEL", "INS", "DUP", "INV", "BND", "TOTAL_COUNT", "TOTAL_SPAN_MB"]
     rows = []
     for metric in metrics:
-        observed_h, pvalue = exact_permutation_kruskal(burden[metric].to_numpy(), burden["group"].to_numpy())
+        observed_h, pvalue, permutation_method, n_permutations = permutation_kruskal(
+            burden[metric].to_numpy(), burden["group"].to_numpy()
+        )
         rows.append(
             {
                 "metric": metric,
                 "n_samples": int(len(burden)),
-                "n_groups": 4,
+                "n_groups": len(PANEL_GROUP_ORDER),
                 "exact_permutation_p": pvalue,
+                "permutation_method": permutation_method,
+                "n_permutations": n_permutations,
                 "kruskal_h": observed_h,
-                "epsilon_squared": epsilon_squared(observed_h, len(burden), 4),
+                "epsilon_squared": epsilon_squared(observed_h, len(burden), len(PANEL_GROUP_ORDER)),
             }
         )
     stats_df = pd.DataFrame(rows)
@@ -1790,7 +1833,7 @@ def write_report(
     lines.append("1. Load existing Figure 5 input tables and methylation file inventory.")
     lines.append("2. Recompute sample-level non-chr15 CNV burden and SV burden statistics.")
     lines.append("3. Re-bin the existing breakpoint-coordinate-aligned methylation table into distance-decay intervals.")
-    lines.append("4. Build distance-bin summaries, exact permutation/sign-flip statistics, and bootstrap confidence intervals.")
+    lines.append("4. Build distance-bin summaries, reproducible permutation/sign-flip statistics, and bootstrap confidence intervals.")
     lines.append("5. Render a simplified main figure plus a supplementary full-coverage figure and write analysis tables and narrative report.\n")
     lines.append("## Suggested panel titles\n")
     lines.append("- A. chr15 HiFi coverage and deletion classes")
@@ -1801,12 +1844,12 @@ def write_report(
     lines.append("## Key quantitative observations\n")
     lines.append(
         f"- Non-chr15 CNV count burden remains weakly separated across groups "
-        f"(`exact permutation p={format_pvalue(count_stats['exact_permutation_p'])}`, "
+        f"(`permutation p={format_pvalue(count_stats['exact_permutation_p'])}`, "
         f"`q={format_pvalue(count_stats['q_value'])}`, `epsilon^2={count_stats['epsilon_squared']:.2f}`)."
     )
     lines.append(
         f"- Non-chr15 CNV total span is similarly non-dominant "
-        f"(`exact permutation p={format_pvalue(total_stats['exact_permutation_p'])}`)."
+        f"(`permutation p={format_pvalue(total_stats['exact_permutation_p'])}`)."
     )
     lines.append(
         f"- Total SV count does not separate groups strongly "
@@ -1837,7 +1880,7 @@ def write_report(
     lines.append("\n## Results-ready interpretation template\n")
     lines.append(
         "Deletion carriers showed a predominantly recurrent chr15 architecture, with most samples mapping to BP1/BP2-to-BP3/BP4-like classes and a single atypical extended deletion. "
-        "Outside the canonical chr15 event, large autosomal CNV burden did not separate groups strongly (`exact permutation p="
+        "Outside the canonical chr15 event, large autosomal CNV burden did not separate groups strongly (`permutation p="
         f"{format_pvalue(count_stats['exact_permutation_p'])}` for count burden), and genome-wide SV burden showed similarly shallow differences (`total SV count p={format_pvalue(sv_total['exact_permutation_p'])}`; all SV burden `q>=0.05`). "
         "Breakpoint-coordinate-aligned methylation differences relative to controls remained small overall and were most consistent with weak, local deviations rather than a broad or uniform epigenetic bleed effect. "
         "The UPD sample was analyzed only at canonical breakpoint-matched coordinates and is therefore interpreted descriptively rather than as evidence for true breakpoint-flanking methylation change."

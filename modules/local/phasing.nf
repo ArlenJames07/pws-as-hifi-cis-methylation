@@ -21,7 +21,7 @@ process PHASE_VARIANTS {
 
     script:
     """
-    hiphase \
+    ${params.hiphase_bin} \
         --threads ${task.cpus} \
         --reference ${reference} \
         --bam ${bam} \
@@ -34,15 +34,15 @@ process PHASE_VARIANTS {
         --blocks-file ${sample}.blocks.tsv \
         --summary-file ${sample}.summary.tsv
 
-    samtools index -@ ${task.cpus} ${sample}.phased.bam
-    bcftools index --force --threads ${task.cpus} --tbi ${sample}.small.phased.vcf.gz
-    bcftools index --force --threads ${task.cpus} --tbi ${sample}.sv.phased.vcf.gz
+    ${params.samtools_bin} index -@ ${task.cpus} ${sample}.phased.bam
+    ${params.bcftools_bin} index --force --threads ${task.cpus} --tbi ${sample}.small.phased.vcf.gz
+    ${params.bcftools_bin} index --force --threads ${task.cpus} --tbi ${sample}.sv.phased.vcf.gz
 
     cat > ${sample}.phasing.versions.yml <<-END_VERSIONS
     "${task.process}":
-      hiphase: "\$(hiphase --version 2>&1 | head -n 1)"
-      samtools: "\$(samtools --version | head -n 1)"
-      bcftools: "\$(bcftools --version | head -n 1)"
+      hiphase: "\$(${params.hiphase_bin} --version 2>&1 | head -n 1)"
+      samtools: "\$(${params.samtools_bin} --version | head -n 1)"
+      bcftools: "\$(${params.bcftools_bin} --version | head -n 1)"
     END_VERSIONS
     """
 

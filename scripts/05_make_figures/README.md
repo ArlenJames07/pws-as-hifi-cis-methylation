@@ -2,6 +2,14 @@
 
 The canonical figure programs are `FIGURE_1.py` through `FIGURE_5.py`.
 
+The shared 17-sample cohort includes six DiGeorge samples: `008D`, `009D`,
+`010D`, `011D`, `012D`, and `015D`. They are recognized as the `DIGEORGE`
+analysis group (displayed as `DiGeorge`) in cohort-wide summaries. Analyses
+that specifically estimate PWS/AS chr15 deletion breakpoints retain their
+biologically defined PWS/AS-only comparison; DiGeorge samples remain included
+in genome-wide, QC, phasing, CNV, SV, and methylation summaries and are not
+misclassified as a chr15 deletion group.
+
 Nextflow runs Figures 1–3 after the core workflow when `run_figures: true`.
 Their local paths are supplied by the workflow, so the scripts' historical
 absolute-path defaults are not used.

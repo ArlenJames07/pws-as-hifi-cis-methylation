@@ -17,7 +17,7 @@ process CALL_CNV {
 
     script:
     """
-    hificnv \
+    ${params.hificnv_bin} \
         --bam ${bam} \
         --ref ${reference} \
         --maf ${small_vcf} \
@@ -27,7 +27,7 @@ process CALL_CNV {
 
     cat > ${sample}.hificnv.versions.yml <<-END_VERSIONS
     "${task.process}":
-      hificnv: "\$(hificnv --version 2>&1 | head -n 1)"
+      hificnv: "\$(${params.hificnv_bin} --version 2>&1 | head -n 1)"
     END_VERSIONS
     """
 

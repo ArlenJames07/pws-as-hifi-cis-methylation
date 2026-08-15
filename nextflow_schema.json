@@ -16,6 +16,17 @@
       "default": "results",
       "description": "Published output directory."
     },
+    "work_dir": {
+      "type": "string",
+      "format": "directory-path",
+      "description": "Nextflow work directory. Defaults to work/ inside the repository."
+    },
+    "stage": {
+      "type": "string",
+      "enum": ["alignment", "small_variants", "structural_variants", "phasing", "cnv", "methylation", "all"],
+      "default": "all",
+      "description": "Run cumulatively through this stage. Use -resume between sequential stage commands."
+    },
     "reference": {
       "type": "string",
       "format": "file-path",
@@ -90,6 +101,36 @@
       "type": "string",
       "default": "run_deepvariant",
       "description": "DeepVariant launcher on PATH or an absolute executable path."
+    },
+    "pbmm2_bin": {
+      "type": "string",
+      "default": "pbmm2",
+      "description": "pbmm2 executable on PATH or an absolute path."
+    },
+    "samtools_bin": {
+      "type": "string",
+      "default": "samtools",
+      "description": "samtools executable on PATH or an absolute path."
+    },
+    "bcftools_bin": {
+      "type": "string",
+      "default": "bcftools",
+      "description": "bcftools executable on PATH or an absolute path."
+    },
+    "pbsv_bin": {
+      "type": "string",
+      "default": "pbsv",
+      "description": "pbsv executable on PATH or an absolute path."
+    },
+    "hiphase_bin": {
+      "type": "string",
+      "default": "hiphase",
+      "description": "HiPhase executable on PATH or an absolute path."
+    },
+    "hificnv_bin": {
+      "type": "string",
+      "default": "hificnv",
+      "description": "HiFiCNV executable on PATH or an absolute path."
     },
     "pbcpgtools_bin": {
       "type": "string",

@@ -54,13 +54,13 @@ process FILTER_SMALL_VARIANTS {
 
     script:
     """
-    bcftools view --threads ${task.cpus} --apply-filters PASS --output-type z \
+    ${params.bcftools_bin} view --threads ${task.cpus} --apply-filters PASS --output-type z \
         --output ${sample}.small.pass.vcf.gz ${vcf}
-    bcftools index --threads ${task.cpus} --tbi ${sample}.small.pass.vcf.gz
+    ${params.bcftools_bin} index --threads ${task.cpus} --tbi ${sample}.small.pass.vcf.gz
 
     cat > ${sample}.small_filter.versions.yml <<-END_VERSIONS
     "${task.process}":
-      bcftools: "\$(bcftools --version | head -n 1)"
+      bcftools: "\$(${params.bcftools_bin} --version | head -n 1)"
     END_VERSIONS
     """
 
@@ -88,11 +88,11 @@ process DISCOVER_SV {
 
     script:
     """
-    pbsv discover --tandem-repeats ${tandem_repeats} ${bam} ${sample}.svsig.gz
+    ${params.pbsv_bin} discover --tandem-repeats ${tandem_repeats} ${bam} ${sample}.svsig.gz
 
     cat > ${sample}.pbsv_discover.versions.yml <<-END_VERSIONS
     "${task.process}":
-      pbsv: "\$(pbsv --version 2>&1 | head -n 1)"
+      pbsv: "\$(${params.pbsv_bin} --version 2>&1 | head -n 1)"
     END_VERSIONS
     """
 
@@ -121,16 +121,16 @@ process CALL_SV {
 
     script:
     """
-    pbsv call --num-threads ${task.cpus} ${reference} ${signature} ${sample}.sv.vcf
-    bcftools view --apply-filters PASS \
+    ${params.pbsv_bin} call --num-threads ${task.cpus} ${reference} ${signature} ${sample}.sv.vcf
+    ${params.bcftools_bin} view --apply-filters PASS \
         --include 'INFO/SVTYPE="BND" || abs(INFO/SVLEN)>=${params.min_sv_length}' \
         --output-type z --output ${sample}.sv.pass.vcf.gz ${sample}.sv.vcf
-    bcftools index --tbi ${sample}.sv.pass.vcf.gz
+    ${params.bcftools_bin} index --tbi ${sample}.sv.pass.vcf.gz
 
     cat > ${sample}.pbsv_call.versions.yml <<-END_VERSIONS
     "${task.process}":
-      pbsv: "\$(pbsv --version 2>&1 | head -n 1)"
-      bcftools: "\$(bcftools --version | head -n 1)"
+      pbsv: "\$(${params.pbsv_bin} --version 2>&1 | head -n 1)"
+      bcftools: "\$(${params.bcftools_bin} --version | head -n 1)"
     END_VERSIONS
     """
 

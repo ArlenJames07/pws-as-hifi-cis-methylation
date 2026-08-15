@@ -1,5 +1,7 @@
 input: assets/samplesheet.csv
 outdir: results
+work_dir: work
+stage: alignment
 
 # Reference resources (T2T-CHM13v2.0)
 reference: /absolute/path/to/chm13v2.0.fa
@@ -20,3 +22,14 @@ repeats_bed: /absolute/path/to/repeatmasker.bed
 # Figures 4 and 5 are render-only and require their original precomputed tables.
 figure4_tables: null
 figure5_tables: null
+
+# Programs: command names are sufficient when they are on PATH. Absolute paths
+# can be used for a workstation-specific run.
+pbmm2_bin: pbmm2
+samtools_bin: samtools
+deepvariant_bin: run_deepvariant
+bcftools_bin: bcftools
+pbsv_bin: pbsv
+hiphase_bin: hiphase
+hificnv_bin: hificnv
+pbcpgtools_bin: aligned_bam_to_cpg_scores

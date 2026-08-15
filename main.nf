@@ -23,6 +23,8 @@ Required:
 
 Common options:
   --outdir            Output directory [results]
+  --stage             Stop after: alignment, small_variants,
+                      structural_variants, phasing, cnv, or methylation [all]
   --run_figures       Run Figures 1-3 after the core workflow [false]
   -profile conda      Create pinned Conda environments per process
   -resume             Reuse completed work
@@ -44,43 +46,6 @@ def requiredFile(name, value) {
         error "Missing required parameter --${name}. Run with --help for usage."
     }
     return file(value, checkIfExists: true)
-}
-
-workflow CORE {
-    take:
-    samples
-    reference
-    reference_fai
-    tandem_repeats
-    cnv_exclude
-    cpg_model
-
-    main:
-    ALIGN_HIFI(samples, reference, reference_fai)
-
-    CALL_SMALL_VARIANTS(ALIGN_HIFI.out.alignments, reference, reference_fai)
-    FILTER_SMALL_VARIANTS(CALL_SMALL_VARIANTS.out.calls)
-
-    DISCOVER_SV(ALIGN_HIFI.out.alignments, tandem_repeats)
-    CALL_SV(DISCOVER_SV.out.signatures, reference, reference_fai)
-
-    phasing_inputs = FILTER_SMALL_VARIANTS.out.filtered
-        .join(CALL_SV.out.calls, by: 0)
-        .map { sample, bam, bai, small_vcf, small_tbi, sv_vcf, sv_tbi ->
-            tuple(sample, bam, bai, small_vcf, small_tbi, sv_vcf, sv_tbi)
-        }
-
-    PHASE_VARIANTS(phasing_inputs, reference, reference_fai)
-    CALL_CNV(PHASE_VARIANTS.out.phased, reference, reference_fai, cnv_exclude)
-    CALL_METHYLATION(PHASE_VARIANTS.out.phased, cpg_model)
-
-    emit:
-    alignments  = ALIGN_HIFI.out.alignments
-    small_calls = FILTER_SMALL_VARIANTS.out.filtered
-    sv_calls    = CALL_SV.out.calls
-    phased      = PHASE_VARIANTS.out.phased
-    cnv         = CALL_CNV.out.cnv
-    methylation = CALL_METHYLATION.out.methylation
 }
 
 workflow FIGURES {
@@ -127,6 +92,20 @@ workflow {
     cnv_exclude = requiredFile('cnv_exclude', params.cnv_exclude)
     cpg_model = requiredFile('cpg_model', params.cpg_model)
 
+    stage_order = [
+        'alignment',
+        'small_variants',
+        'structural_variants',
+        'phasing',
+        'cnv',
+        'methylation',
+    ]
+    selected_stage = params.stage == 'all' ? 'methylation' : params.stage
+    stage_index = stage_order.indexOf(selected_stage)
+    if (stage_index < 0) {
+        error "Invalid --stage '${params.stage}'. Choose: ${stage_order.join(', ')}, or all."
+    }
+
     parsed_samples = channel
         .fromPath(input_file, checkIfExists: true)
         .splitCsv(header: true, strip: true)
@@ -150,9 +129,36 @@ workflow {
             tuple(sample, bams.first())
         }
 
-    CORE(samples, reference, reference_fai, tandem_repeats, cnv_exclude, cpg_model)
+    ALIGN_HIFI(samples, reference, reference_fai)
 
-    if (params.run_figures) {
+    if (stage_index >= stage_order.indexOf('small_variants')) {
+        CALL_SMALL_VARIANTS(ALIGN_HIFI.out.alignments, reference, reference_fai)
+        FILTER_SMALL_VARIANTS(CALL_SMALL_VARIANTS.out.calls)
+    }
+
+    if (stage_index >= stage_order.indexOf('structural_variants')) {
+        DISCOVER_SV(ALIGN_HIFI.out.alignments, tandem_repeats)
+        CALL_SV(DISCOVER_SV.out.signatures, reference, reference_fai)
+    }
+
+    if (stage_index >= stage_order.indexOf('phasing')) {
+        phasing_inputs = FILTER_SMALL_VARIANTS.out.filtered
+            .join(CALL_SV.out.calls, by: 0)
+            .map { sample, bam, bai, small_vcf, small_tbi, sv_vcf, sv_tbi ->
+                tuple(sample, bam, bai, small_vcf, small_tbi, sv_vcf, sv_tbi)
+            }
+        PHASE_VARIANTS(phasing_inputs, reference, reference_fai)
+    }
+
+    if (stage_index >= stage_order.indexOf('cnv')) {
+        CALL_CNV(PHASE_VARIANTS.out.phased, reference, reference_fai, cnv_exclude)
+    }
+
+    if (stage_index >= stage_order.indexOf('methylation')) {
+        CALL_METHYLATION(PHASE_VARIANTS.out.phased, cpg_model)
+    }
+
+    if (params.run_figures && params.stage == 'all') {
         gtf = requiredFile('gtf', params.gtf)
         metadata = requiredFile('metadata', params.metadata)
         icr_bed = requiredFile('icr_bed', params.icr_bed)
@@ -161,9 +167,9 @@ workflow {
         repeats_bed = requiredFile('repeats_bed', params.repeats_bed)
 
         FIGURES(
-            CORE.out.phased,
-            CORE.out.cnv,
-            CORE.out.methylation,
+            PHASE_VARIANTS.out.phased,
+            CALL_CNV.out.cnv,
+            CALL_METHYLATION.out.methylation,
             gtf,
             metadata,
             icr_bed,

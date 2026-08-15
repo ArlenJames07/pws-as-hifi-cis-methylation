@@ -5,6 +5,7 @@ work/
 # Pipeline results (human genomic outputs must not be committed)
 results/
 results-test/
+logs/
 
 # Python/editor caches
 __pycache__/

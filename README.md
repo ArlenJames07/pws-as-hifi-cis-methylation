@@ -30,6 +30,7 @@ contain machine-specific paths and are not called by the Nextflow workflow.
 ```text
 pws-as-hifi-cis-methylation/
 ├── main.nf                    # workflow entry point and channel wiring
+├── run_step.sh                # run one cumulative stage at a time
 ├── nextflow.config            # defaults, resources, and execution profiles
 ├── nextflow_schema.json       # documented parameter interface
 ├── conf/
@@ -79,6 +80,13 @@ profile. If all programs are already installed, use the `standard` profile.
    002P,/data/private/002P.hifi.bam
    ```
 
+   The tracked template lists the complete 17-sample cohort, including the six
+   DiGeorge samples `008D`, `009D`, `010D`, `011D`, `012D`, and `015D`.
+   Replace every placeholder BAM path before running. Every pre-figure stage
+   reads this same sheet, so these samples are included automatically in
+   alignment, small-variant calling, structural-variant calling, phasing, CNV,
+   and methylation analysis.
+
 3. Edit `params.local.yml` with absolute paths to the T2T-CHM13v2.0 reference
    resources, FASTA index, and the pb-CpG-tools model. Set
    `input: samplesheet.local.csv`.
@@ -102,7 +110,67 @@ parameter file:
 pbcpgtools_bin: /opt/pb-CpG-tools/bin/aligned_bam_to_cpg_scores
 ```
 
+The same pattern is supported for `pbmm2_bin`, `samtools_bin`,
+`bcftools_bin`, `pbsv_bin`, `hiphase_bin`, and `hificnv_bin`. This allows a
+local run to reproduce the exact executable locations recorded by the legacy
+scripts without editing workflow modules.
+
 ## Run
+
+### Run one stage at a time
+
+The `--stage` option is cumulative. Each command stops after the requested
+stage. Always keep the same `work_dir` and use `-resume`: previously completed
+processes are then loaded from the Nextflow cache, and only the new stage runs.
+The local `workstation` profile limits memory-heavy processes to one sample at
+a time, which is appropriate for the configured 32-core host.
+
+Run the following commands in order:
+
+```bash
+# Short form using the included launcher:
+./run_step.sh alignment
+./run_step.sh small_variants
+./run_step.sh structural_variants
+./run_step.sh phasing
+./run_step.sh cnv
+./run_step.sh methylation
+```
+
+The equivalent complete commands are:
+
+```bash
+# 1. Alignment -> results/01_alignment/
+nextflow run main.nf -profile workstation,docker \
+  -params-file params.local.yml --stage alignment -resume
+
+# 2. DeepVariant and PASS filtering -> results/02_small_variants/
+nextflow run main.nf -profile workstation,docker \
+  -params-file params.local.yml --stage small_variants -resume
+
+# 3. pbsv discovery/calling -> results/03_structural_variants/
+nextflow run main.nf -profile workstation,docker \
+  -params-file params.local.yml --stage structural_variants -resume
+
+# 4. HiPhase -> results/04_phasing/
+nextflow run main.nf -profile workstation,docker \
+  -params-file params.local.yml --stage phasing -resume
+
+# 5. HiFiCNV -> results/05_cnv/<sample>/
+nextflow run main.nf -profile workstation,docker \
+  -params-file params.local.yml --stage cnv -resume
+
+# 6. pb-CpG-tools -> results/06_methylation/<sample>/
+nextflow run main.nf -profile workstation,docker \
+  -params-file params.local.yml --stage methylation -resume
+```
+
+For example, the structural-variant invocation reconstructs the dependency
+graph through structural variants, but alignment and small-variant tasks are
+reported as `Cached process`; they are not executed again. Do not remove
+`work/` until all six stages are complete.
+
+### Run all pre-figure stages together
 
 Recommended local execution uses Conda for the open Bioconda tools and Docker
 for DeepVariant:
