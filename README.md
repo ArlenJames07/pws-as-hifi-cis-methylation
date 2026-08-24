@@ -31,6 +31,7 @@ contain machine-specific paths and are not called by the Nextflow workflow.
 pws-as-hifi-cis-methylation/
 ├── main.nf                    # workflow entry point and channel wiring
 ├── run_step.sh                # run one cumulative stage at a time
+├── import_existing_results.sh # link completed legacy outputs; run no tools
 ├── nextflow.config            # defaults, resources, and execution profiles
 ├── nextflow_schema.json       # documented parameter interface
 ├── conf/
@@ -117,6 +118,48 @@ scripts without editing workflow modules.
 
 ## Run
 
+### Reuse the outputs produced by the legacy scripts
+
+If the programs in `scripts/01_variant_calling/` through
+`scripts/04_haplotype_methylation/` have already been run, do not start the
+Nextflow analysis again merely to recreate the numbered results layout. The
+repository includes a non-computing importer that creates symbolic links to
+the existing files:
+
+```bash
+# Preview every link without changing results/
+./import_existing_results.sh --dry-run
+
+# Create the links
+./import_existing_results.sh
+```
+
+The importer uses the verified legacy locations and creates this layout:
+
+```text
+results/
+├── 01_alignment/                         # /mnt/diskrare/.../aligned_reads/t2t
+├── 02_small_variants/{raw,filtered}/
+├── 03_structural_variants/{signatures,calls}/
+├── 04_phasing/
+├── 05_cnv/<sample>/
+└── 06_methylation/<sample>/
+```
+
+It links all primary files found at the top level of the legacy folders,
+including legacy reference or older samples, preserves the original
+filenames, and never replaces an existing file or link. Symbolic links avoid
+duplicating the large BAM, VCF, BigWig, and BED files. Keep the original legacy
+directories available because the links depend on them. Existing downstream
+PCA images inside the HiFiCNV directory are intentionally not imported because
+this command stops before figure products; it imports the primary top-level
+HiFiCNV outputs only.
+
+This operation organizes existing outputs but does not add them to the
+Nextflow task cache. Do not subsequently run `run_step.sh` for stages that you
+intend to reuse only through these links; Nextflow cache reuse is based on
+`work/` and `.nextflow/`, not on files present under `results/`.
+
 ### Run one stage at a time
 
 The `--stage` option is cumulative. Each command stops after the requested
@@ -172,15 +215,43 @@ reported as `Cached process`; they are not executed again. Do not remove
 
 ### Run all pre-figure stages together
 
-Recommended local execution uses Conda for the open Bioconda tools and Docker
-for DeepVariant:
+The launcher accepts `all` and explicitly disables figure generation. It runs
+alignment through methylation and stops after `results/06_methylation/`:
+
+```bash
+./run_step.sh all
+```
+
+To leave the complete pre-figure workflow running after closing the terminal:
+
+```bash
+mkdir -p logs
+nohup ./run_step.sh all > logs/prefigure_pipeline.log 2>&1 &
+echo $! > logs/prefigure_pipeline.pid
+```
+
+Monitor it with:
+
+```bash
+tail -f logs/prefigure_pipeline.log
+```
+
+The equivalent direct Nextflow command for the configured workstation uses
+the local resource limits plus Docker for DeepVariant:
 
 ```bash
 nextflow run main.nf \
-  -profile conda,docker \
+  -profile workstation,docker \
   -params-file params.local.yml \
+  --stage all \
+  --run_figures false \
   -resume
 ```
+
+Because `-resume` is enabled, successfully completed tasks are loaded from the
+cache and only missing or interrupted work is submitted. Keep the same
+`work_dir`, `.nextflow/` cache, input paths, reference, and program parameters.
+The published files in `results/` alone are not sufficient for cache reuse.
 
 On a machine where every dependency is already on `PATH`:
 

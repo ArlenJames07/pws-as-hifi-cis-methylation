@@ -2,16 +2,16 @@
 set -euo pipefail
 
 if [[ $# -ne 1 ]]; then
-    echo "Usage: $0 {alignment|small_variants|structural_variants|phasing|cnv|methylation}" >&2
+    echo "Usage: $0 {alignment|small_variants|structural_variants|phasing|cnv|methylation|all}" >&2
     exit 2
 fi
 
 stage="$1"
 case "$stage" in
-    alignment|small_variants|structural_variants|phasing|cnv|methylation) ;;
+    alignment|small_variants|structural_variants|phasing|cnv|methylation|all) ;;
     *)
         echo "Invalid stage: $stage" >&2
-        echo "Choose: alignment, small_variants, structural_variants, phasing, cnv, or methylation" >&2
+        echo "Choose: alignment, small_variants, structural_variants, phasing, cnv, methylation, or all" >&2
         exit 2
         ;;
 esac
@@ -28,5 +28,6 @@ exec nextflow run main.nf \
     -profile "$profile" \
     -params-file "$params_file" \
     --stage "$stage" \
+    --run_figures false \
     -resume \
     -ansi-log false
