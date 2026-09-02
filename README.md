@@ -47,7 +47,7 @@ pws-as-hifi-cis-methylation/
     ├── 02_phasing/
     ├── 03_hifi_cnvs/
     ├── 04_haplotype_methylation/
-    └── 05_make_figures/       # manuscript figure programs
+    └── figures/               # manuscript figure programs
 ```
 
 ## Requirements
@@ -316,7 +316,7 @@ From the `main` branch, review and stage this reproducibility change with:
 git status --short
 git add \
   .gitignore README.md main.nf nextflow.config nextflow_schema.json \
-  assets conf envs modules tests scripts/05_make_figures/README.md
+  assets conf envs modules tests scripts/figures/README.md
 git diff --cached --stat
 git diff --cached
 git commit -m "Add reproducible Nextflow HiFi analysis pipeline"
