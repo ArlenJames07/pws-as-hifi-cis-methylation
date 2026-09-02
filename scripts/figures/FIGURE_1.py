@@ -62,7 +62,13 @@ from matplotlib.patches import Rectangle
 # ---------------------------------------------------------------------------
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_OUTDIR = PROJECT_ROOT / "results" / "07_figures" / "figure_1"
+DEFAULT_RESULTS_DIR = PROJECT_ROOT / "results"
+DEFAULT_OUTDIR = DEFAULT_RESULTS_DIR / "07_figures" / "figure_1"
+DEFAULT_PHASED_DIR = DEFAULT_RESULTS_DIR / "04_phasing"
+DEFAULT_METHYLATION_DIR = DEFAULT_RESULTS_DIR / "06_methylation"
+DEFAULT_CNV_DIR = DEFAULT_RESULTS_DIR / "05_cnv"
+DEFAULT_METADATA = PROJECT_ROOT / "assets" / "metadata.csv"
+DEFAULT_GTF = Path("/home/rare/arlen/reference/chm13v22.sorted.gtf")
 
 CHROM = "chr15"
 DOMAIN_START = 22_500_000
@@ -202,12 +208,12 @@ class BedStats:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--vcf-dir", default="/mnt/diskrare/arlenb/08/hiphase_results/variants")
-    parser.add_argument("--bam-dir", default="/mnt/diskrare/arlenb/08/hiphase_results/bamfiles")
-    parser.add_argument("--methylation-dir", default="/home/rare/arlen/outputs/methylation/genomes_2")
-    parser.add_argument("--cnv-dir", default="/home/rare/arlen/outputs/Variants/Structural_variants/hifi_cnv")
-    parser.add_argument("--gtf", default="/home/rare/arlen/reference/chm13v22.sorted.gtf")
-    parser.add_argument("--metadata", default="/home/rare/arlen/outputs/methylation/metadata/metadata_methylation.csv")
+    parser.add_argument("--vcf-dir", type=Path, default=DEFAULT_PHASED_DIR)
+    parser.add_argument("--bam-dir", type=Path, default=DEFAULT_PHASED_DIR)
+    parser.add_argument("--methylation-dir", type=Path, default=DEFAULT_METHYLATION_DIR)
+    parser.add_argument("--cnv-dir", type=Path, default=DEFAULT_CNV_DIR)
+    parser.add_argument("--gtf", type=Path, default=DEFAULT_GTF)
+    parser.add_argument("--metadata", type=Path, default=DEFAULT_METADATA)
     parser.add_argument("--outdir", type=Path, default=DEFAULT_OUTDIR)
     parser.add_argument(
         "--skip-bam-qc",
@@ -286,7 +292,12 @@ def choose_file(files: list[Path], sample_id: str) -> Path | None:
 def find_sample_file(directory: Path, sample_id: str, suffix: str) -> Path | None:
     if not directory.exists():
         return None
-    return choose_file(list(directory.glob(f"*{sample_id}*{suffix}")), sample_id)
+    sample_directory = directory / sample_id
+    if sample_directory.is_dir():
+        matches = list(sample_directory.glob(f"*{sample_id}*{suffix}"))
+    else:
+        matches = list(directory.rglob(f"*{sample_id}*{suffix}"))
+    return choose_file(matches, sample_id)
 
 
 def run_command(args: list[str]) -> str:
