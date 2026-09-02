@@ -31,7 +31,6 @@ contain machine-specific paths and are not called by the Nextflow workflow.
 pws-as-hifi-cis-methylation/
 ├── main.nf                    # workflow entry point and channel wiring
 ├── run_step.sh                # run one cumulative stage at a time
-├── import_existing_results.sh # link completed legacy outputs; run no tools
 ├── nextflow.config            # defaults, resources, and execution profiles
 ├── nextflow_schema.json       # documented parameter interface
 ├── conf/
@@ -117,48 +116,6 @@ local run to reproduce the exact executable locations recorded by the legacy
 scripts without editing workflow modules.
 
 ## Run
-
-### Reuse the outputs produced by the legacy scripts
-
-If the programs in `scripts/01_variant_calling/` through
-`scripts/04_haplotype_methylation/` have already been run, do not start the
-Nextflow analysis again merely to recreate the numbered results layout. The
-repository includes a non-computing importer that creates symbolic links to
-the existing files:
-
-```bash
-# Preview every link without changing results/
-./import_existing_results.sh --dry-run
-
-# Create the links
-./import_existing_results.sh
-```
-
-The importer uses the verified legacy locations and creates this layout:
-
-```text
-results/
-├── 01_alignment/                         # /mnt/diskrare/.../aligned_reads/t2t
-├── 02_small_variants/{raw,filtered}/
-├── 03_structural_variants/{signatures,calls}/
-├── 04_phasing/
-├── 05_cnv/<sample>/
-└── 06_methylation/<sample>/
-```
-
-It links all primary files found at the top level of the legacy folders,
-including legacy reference or older samples, preserves the original
-filenames, and never replaces an existing file or link. Symbolic links avoid
-duplicating the large BAM, VCF, BigWig, and BED files. Keep the original legacy
-directories available because the links depend on them. Existing downstream
-PCA images inside the HiFiCNV directory are intentionally not imported because
-this command stops before figure products; it imports the primary top-level
-HiFiCNV outputs only.
-
-This operation organizes existing outputs but does not add them to the
-Nextflow task cache. Do not subsequently run `run_step.sh` for stages that you
-intend to reuse only through these links; Nextflow cache reuse is based on
-`work/` and `.nextflow/`, not on files present under `results/`.
 
 ### Run one stage at a time
 
