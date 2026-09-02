@@ -9,7 +9,7 @@ runtime.
 
 from __future__ import annotations
 
-# --- Vendored from scripts/paper_vf/paper_vf_q1_pipeline.py ---
+# --- Embedded shared analysis implementation ---
 
 """
 Q1 PWS/AS T2T methylation architecture pipeline
@@ -88,7 +88,7 @@ DEFAULT_VCF_DIR = Path("/mnt/diskrare/arlenb/08/hiphase_results/variants")
 DEFAULT_BAM_DIR = Path("/mnt/diskrare/arlenb/08/hiphase_results/bamfiles")
 DEFAULT_CNV_DIR = Path("/home/rare/arlen/outputs/Variants/Structural_variants/hifi_cnv")
 DEFAULT_GTF = Path("/home/rare/arlen/reference/chm13v22.sorted.gtf")
-DEFAULT_OUTDIR = Path("/home/rare/arlen/pws-as-hifi-cis-methylation/scripts/hifi_multiomics_pipeline/06_results")
+DEFAULT_OUTDIR = Path(__file__).resolve().parents[2] / "results" / "07_figures" / "figure_3"
 
 EXPECTED_STATES = {
     "CONTROL": {
@@ -1543,7 +1543,7 @@ def _paper_vf_q1_pipeline_main():
     pd.DataFrame([summary]).to_csv(outdir / "run_summary.tsv", sep="\t", index=False)
     log("Done.")
 
-# --- Vendored from scripts/paper_vf/paper_vf_phase2_reciprocal_cis_architecture.py ---
+# --- Embedded reciprocal cis-architecture helpers ---
 
 """
 Phase 2 reciprocal cis-architecture analysis for the PWS/AS manuscript.
@@ -1563,7 +1563,6 @@ the Phase 2 prompt explicitly filters on haplotype read coverage.
 
 
 import argparse
-import ast
 import gzip
 import math
 import re
@@ -1606,29 +1605,9 @@ GREY = "#626262"
 LIGHT_GREY = "#d0d0d0"
 DEFAULT_ICR_BED = Path("/home/rare/arlen/reference/ICR_t2t.bed")
 DEFAULT_SEG_DUP = Path("/home/rare/arlen/reference/dupseg")
-DEFAULT_BP_SOURCE_SCRIPT = Path("/home/rare/arlen/scripts/Daniela/pws_chr15_hifi_deletion_analysis.py")
-FALLBACK_PWS_BREAKPOINTS = {"BP1": 20_940_000, "BP2": 21_070_000, "BP3": 26_050_000}
-
-
-def load_pws_breakpoints_from_daniela(script_path: Path = DEFAULT_BP_SOURCE_SCRIPT) -> Dict[str, int]:
-    """Read BP1/BP2/BP3 from Daniela's CHM13 deletion-analysis script."""
-    try:
-        tree = ast.parse(script_path.read_text())
-        for node in tree.body:
-            if not isinstance(node, ast.Assign):
-                continue
-            if not any(isinstance(target, ast.Name) and target.id == "PWS_BREAKPOINTS" for target in node.targets):
-                continue
-            raw = ast.literal_eval(node.value)
-            breakpoints = {str(k): int(v) for k, v in raw.items() if str(k) in {"BP1", "BP2", "BP3"}}
-            if set(breakpoints) == {"BP1", "BP2", "BP3"}:
-                return breakpoints
-    except Exception:
-        pass
-    return dict(FALLBACK_PWS_BREAKPOINTS)
-
-
-PWS_BREAKPOINTS_T2T = load_pws_breakpoints_from_daniela()
+# T2T-CHM13 breakpoint anchors are embedded so this program never reads Python
+# source code from another project at runtime.
+PWS_BREAKPOINTS_T2T = {"BP1": 20_940_000, "BP2": 21_070_000, "BP3": 26_050_000}
 BP_HOTSPOTS_T2T = [(name, PWS_BREAKPOINTS_T2T[name]) for name in ("BP1", "BP2", "BP3")]
 BP_CLUSTER_INTERVALS_T2T = [
     {
@@ -2768,8 +2747,7 @@ def bp_hotspots_table(spec: WindowSpec) -> pd.DataFrame:
                 "position": pos,
                 "position_mb": pos / 1e6,
                 "in_plotted_range": spec.start <= pos <= spec.end,
-                "source_script": str(DEFAULT_BP_SOURCE_SCRIPT),
-                "source_variable": "PWS_BREAKPOINTS",
+                "source": "embedded_T2T_CHM13_anchor",
             }
         )
     return pd.DataFrame(rows)
@@ -3486,7 +3464,7 @@ def _phase2_main() -> None:
     ).to_csv(outdir / "phase2_run_summary.tsv", sep="\t", index=False)
     log("Done.")
 
-# --- Vendored from scripts/paper_vf/create_figure2_reciprocal_cis_architecture_improved.py ---
+# --- Embedded Figure 2 annotation helpers used by Figure 3 ---
 
 """
 Create an improved Figure 2 for the Q1 genomics paper from existing Phase 2 tables.
@@ -3523,7 +3501,7 @@ from matplotlib.patches import FancyBboxPatch, Rectangle
 from matplotlib.ticker import FuncFormatter
 
 
-DEFAULT_OUTDIR = Path("/home/rare/arlen/pws-as-hifi-cis-methylation/scripts/hifi_multiomics_pipeline/06_results")
+DEFAULT_OUTDIR = Path(__file__).resolve().parents[2] / "results" / "07_figures" / "figure_3"
 DEFAULT_GTF = Path("/home/rare/arlen/reference/chm13v22.sorted.gtf")
 DEFAULT_ICR_BED = Path("/home/rare/arlen/reference/ICR_t2t.bed")
 DISPLAY_START = 18_000_000
@@ -4555,7 +4533,7 @@ def _figure2_render_main() -> None:
         "tables/Phase2_gene_track_features.tsv",
         str(args.gtf),
         str(args.icr_bed),
-        "scripts/paper_vf/create_figure2_reciprocal_cis_architecture_improved.py",
+        str(Path(__file__).resolve()),
     ]
     output_files = [
         "figures/Figure2_reciprocal_cis_architecture_improved.png",
@@ -4580,7 +4558,7 @@ def _figure2_render_main() -> None:
 # Figure 3 reuses the Figure 2 annotation-track renderer.
 draw_figure2_annotation_track = draw_annotation_track
 
-# --- Vendored from scripts/paper_vf/phase3_boundary_mapping.py ---
+# --- Figure 3 boundary-mapping implementation ---
 
 """
 Phase 3 methylation boundary mapping for PWS/AS Figure 3 (reviewer-clear version).
@@ -4597,8 +4575,9 @@ This script implements the chr15:22-29 Mb boundary-mapping prompts:
     CTCF if supplied, and imprinted DMR catalogs
   * sensitivity, breakpoint-distance, derivative, and bootstrap support tables
 
-Default inputs match the existing paper_vf Phase 1 outputs and methylation BEDs.
-Outputs are written to /home/rare/arlen/pws-as-hifi-cis-methylation/scripts/hifi_multiomics_pipeline/06_results by default.
+Control haplotype parental labels are inferred directly from the methylation
+BEDs unless an optional assignment table is supplied.
+Outputs are written to results/07_figures/figure_3 by default.
 """
 
 
@@ -4635,6 +4614,8 @@ EXIT_THRESHOLD = 0.1
 ZOOM_FLANK = 50_000
 MIN_CPGS_PER_WINDOW = 1
 CONTROL_MATCH_WINDOW = 10_000
+PWS_IC_ASSIGNMENT_START = 22_691_258
+PWS_IC_ASSIGNMENT_END = 22_693_494
 PATIENT_CONVERGENCE_BP = 5_000
 FIGURE2_DISPLAY_START = 18_000_000
 FIGURE2_DISPLAY_END = 28_000_000
@@ -4710,8 +4691,13 @@ class SignalTrack:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--methylation-dir", default="/home/rare/arlen/outputs/methylation/genomes_2")
-    parser.add_argument("--outdir", default="/home/rare/arlen/pws-as-hifi-cis-methylation/scripts/hifi_multiomics_pipeline/06_results")
-    parser.add_argument("--assignment-table", default="/home/rare/arlen/pws-as-hifi-cis-methylation/scripts/hifi_multiomics_pipeline/06_results/tables/Figure1C_parental_assignment.tsv")
+    parser.add_argument("--outdir", type=Path, default=DEFAULT_OUTDIR)
+    parser.add_argument(
+        "--assignment-table",
+        type=Path,
+        default=None,
+        help="Optional parental-assignment TSV override. If omitted, labels are inferred directly from control hap1/hap2 methylation at the PWS-IC.",
+    )
     parser.add_argument("--gtf", default="/home/rare/arlen/reference/chm13v22.sorted.gtf")
     parser.add_argument("--segdup", default="/home/rare/arlen/reference/dupseg")
     parser.add_argument("--ctcf-bed", default="")
@@ -4969,25 +4955,56 @@ def discover_sample_files(methylation_dir: Path) -> dict[str, dict[str, Path]]:
     return files
 
 
-def read_parental_assignments(path: Path) -> dict[str, dict[str, str]]:
+def read_parental_assignments(
+    path: Path | None,
+    sample_files: dict[str, dict[str, Path]],
+    chrom: str,
+) -> dict[str, dict[str, str]]:
+    """Load an optional override table, then infer any missing control labels."""
     assignments: dict[str, dict[str, str]] = {}
-    if not path.exists():
-        # Known Phase 1 assignments for the two controls; used only if the table
-        # has not been generated yet.
-        return {
-            "017C": {"maternal": "hap1", "paternal": "hap2"},
-            "018C": {"maternal": "hap2", "paternal": "hap1"},
-        }
-    with path.open(newline="") as handle:
-        reader = csv.DictReader(handle, delimiter="\t")
-        for row in reader:
-            sample = row.get("sample_id", "")
-            if sample not in CONTROL_SAMPLES:
+    if path is not None:
+        if not path.exists():
+            raise FileNotFoundError(f"Parental-assignment table does not exist: {path}")
+        with path.open(newline="") as handle:
+            reader = csv.DictReader(handle, delimiter="\t")
+            for row in reader:
+                sample = row.get("sample_id", "")
+                if sample not in CONTROL_SAMPLES:
+                    continue
+                parent = row.get("parental_assignment", "")
+                hap = row.get("haplotype_label", "")
+                if parent in {"maternal", "paternal"} and hap in {"hap1", "hap2"}:
+                    assignments.setdefault(sample, {})[parent] = hap
+
+    for sample in CONTROL_SAMPLES:
+        if {"maternal", "paternal"} <= set(assignments.get(sample, {})):
+            continue
+        layers = sample_files.get(sample, {})
+        means: dict[str, float] = {}
+        for hap in ("hap1", "hap2"):
+            hap_path = layers.get(hap)
+            if hap_path is None:
                 continue
-            parent = row.get("parental_assignment", "")
-            hap = row.get("haplotype_label", "")
-            if parent in {"maternal", "paternal"} and hap in {"hap1", "hap2"}:
-                assignments.setdefault(sample, {})[parent] = hap
+            values = read_methylation_region(
+                hap_path,
+                chrom,
+                PWS_IC_ASSIGNMENT_START,
+                PWS_IC_ASSIGNMENT_END,
+            )
+            if values.empty:
+                continue
+            weights = values["cov"].to_numpy(dtype=float)
+            methylation = values["meth"].to_numpy(dtype=float)
+            means[hap] = float(np.average(methylation, weights=weights)) if np.sum(weights) > 0 else float(np.mean(methylation))
+        if set(means) != {"hap1", "hap2"}:
+            raise RuntimeError(
+                f"Cannot infer parental labels for {sample}: both hap1 and hap2 need CpG calls in "
+                f"{chrom}:{PWS_IC_ASSIGNMENT_START}-{PWS_IC_ASSIGNMENT_END}. "
+                "Supply --assignment-table to override inference."
+            )
+        maternal = max(means, key=means.get)
+        paternal = min(means, key=means.get)
+        assignments[sample] = {"maternal": maternal, "paternal": paternal}
     return assignments
 
 
@@ -8208,7 +8225,7 @@ def main() -> None:
     mkdir(logdir)
 
     files = discover_sample_files(Path(args.methylation_dir))
-    assignments = read_parental_assignments(Path(args.assignment_table))
+    assignments = read_parental_assignments(args.assignment_table, files, args.chrom)
 
     missing_controls = [sample for sample in CONTROL_SAMPLES if sample not in assignments or not {"maternal", "paternal"} <= set(assignments[sample])]
     if missing_controls:
@@ -8524,7 +8541,7 @@ def main() -> None:
     params = {
         "methylation_dir": args.methylation_dir,
         "outdir": args.outdir,
-        "assignment_table": args.assignment_table,
+        "assignment_table": str(args.assignment_table) if args.assignment_table else "inferred_from_PWS_IC_methylation",
         "chrom": args.chrom,
         "region_start": args.region_start,
         "region_end": args.region_end,

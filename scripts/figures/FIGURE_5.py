@@ -36,8 +36,8 @@ from matplotlib.patches import Rectangle
 from scipy import stats
 
 
-DEFAULT_OUTDIR = Path("/home/rare/arlen/pws-as-hifi-cis-methylation/scripts/hifi_multiomics_pipeline/06_results")
-DEFAULT_INPUT_TABLE_DIR = Path("/home/rare/arlen/paper_vf/tables")
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_OUTDIR = PROJECT_ROOT / "results" / "07_figures" / "figure_5"
 DEFAULT_FASTA = Path("/home/rare/arlen/reference/chm13v22.fasta")
 DEFAULT_GTF = Path("/home/rare/arlen/reference/chm13v22.sorted.gtf")
 
@@ -186,7 +186,7 @@ def missing_input_tables(table_dir: Path) -> list[Path]:
 
 
 def resolve_input_table_dir(outdir: Path, requested_table_dir: Path | None = None) -> Path:
-    candidates = [requested_table_dir] if requested_table_dir is not None else [outdir / "tables", DEFAULT_INPUT_TABLE_DIR]
+    candidates = [requested_table_dir] if requested_table_dir is not None else [outdir / "tables"]
     checked: list[Path] = []
     for candidate in candidates:
         if candidate is None:
@@ -197,8 +197,8 @@ def resolve_input_table_dir(outdir: Path, requested_table_dir: Path | None = Non
             return candidate
     details = "\n".join(f"- {path}" for path in checked)
     raise FileNotFoundError(
-        "Figure 5 input tables were not found. Run the Figure 5 table-generation step first, "
-        "or pass --table-dir to a directory containing the Figure5*.tsv inputs.\n"
+        "Figure 5 input tables were not found. Pass --table-dir to a directory containing "
+        "the required Figure5*.tsv inputs, or place them in OUTDIR/tables.\n"
         f"Checked:\n{details}"
     )
 
@@ -1903,7 +1903,7 @@ def parse_args() -> argparse.Namespace:
         "--table-dir",
         type=Path,
         default=None,
-        help="Directory containing precomputed Figure5 input tables. Defaults to outdir/tables, then the original paper_vf tables.",
+        help="Directory containing the required Figure5 input tables. Defaults only to OUTDIR/tables.",
     )
     parser.add_argument("--fasta", type=Path, default=DEFAULT_FASTA)
     parser.add_argument("--gtf", type=Path, default=DEFAULT_GTF)

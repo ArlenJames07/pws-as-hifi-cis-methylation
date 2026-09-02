@@ -21,7 +21,7 @@ process MAKE_FIGURE_1 {
     for f in ${cnv_files}; do ln -sf "\$(realpath \"\$f\")" cnv/; done
     for f in ${methylation_files}; do ln -sf "\$(realpath \"\$f\")" methylation/; done
 
-    python ${moduleDir}/../../scripts/05_make_figures/FIGURE_1.py \
+    python ${moduleDir}/../../scripts/figures/FIGURE_1.py \
         --vcf-dir phased \
         --bam-dir phased \
         --methylation-dir methylation \
@@ -61,7 +61,7 @@ process MAKE_FIGURE_2 {
     for f in ${cnv_files}; do ln -sf "\$(realpath \"\$f\")" cnv/; done
     for f in ${methylation_files}; do ln -sf "\$(realpath \"\$f\")" methylation/; done
 
-    python ${moduleDir}/../../scripts/05_make_figures/FIGURE_2.py \
+    python ${moduleDir}/../../scripts/figures/FIGURE_2.py \
         --methylation-dir methylation \
         --metadata ${metadata} \
         --gtf ${gtf} \
@@ -101,7 +101,7 @@ process MAKE_FIGURE_3 {
     mkdir -p methylation figure_3
     for f in ${methylation_files}; do ln -sf "\$(realpath \"\$f\")" methylation/; done
 
-    python ${moduleDir}/../../scripts/05_make_figures/FIGURE_3.py \
+    python ${moduleDir}/../../scripts/figures/FIGURE_3.py \
         --methylation-dir methylation \
         --assignment-table ${figure_1_results}/tables/Figure1C_parental_assignment.tsv \
         --gtf ${gtf} \
@@ -134,7 +134,7 @@ process MAKE_FIGURE_4 {
 
     script:
     """
-    python ${moduleDir}/../../scripts/05_make_figures/FIGURE_4.py \
+    python ${moduleDir}/../../scripts/figures/FIGURE_4.py \
         --table-dir ${table_dir} \
         --outdir figure_4
     """
@@ -162,7 +162,7 @@ process MAKE_FIGURE_5 {
 
     script:
     """
-    python ${moduleDir}/../../scripts/05_make_figures/FIGURE_5.py \
+    python ${moduleDir}/../../scripts/figures/FIGURE_5.py \
         --table-dir ${table_dir} \
         --fasta ${reference} \
         --gtf ${gtf} \

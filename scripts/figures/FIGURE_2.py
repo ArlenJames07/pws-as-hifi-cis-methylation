@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import sys
 
-# --- Vendored from scripts/paper_vf/paper_vf_q1_pipeline.py ---
+# --- Embedded shared analysis implementation ---
 
 """
 Q1 PWS/AS T2T methylation architecture pipeline
@@ -90,7 +90,7 @@ DEFAULT_VCF_DIR = Path("/mnt/diskrare/arlenb/08/hiphase_results/variants")
 DEFAULT_BAM_DIR = Path("/mnt/diskrare/arlenb/08/hiphase_results/bamfiles")
 DEFAULT_CNV_DIR = Path("/home/rare/arlen/outputs/Variants/Structural_variants/hifi_cnv")
 DEFAULT_GTF = Path("/home/rare/arlen/reference/chm13v22.sorted.gtf")
-DEFAULT_OUTDIR = Path("/home/rare/arlen/pws-as-hifi-cis-methylation/scripts/hifi_multiomics_pipeline/06_results")
+DEFAULT_OUTDIR = Path(__file__).resolve().parents[2] / "results" / "07_figures" / "figure_2"
 
 EXPECTED_STATES = {
     "CONTROL": {
@@ -1545,7 +1545,7 @@ def _paper_vf_q1_pipeline_main():
     pd.DataFrame([summary]).to_csv(outdir / "run_summary.tsv", sep="\t", index=False)
     log("Done.")
 
-# --- Vendored from scripts/paper_vf/paper_vf_phase2_reciprocal_cis_architecture.py ---
+# --- Embedded reciprocal cis-architecture implementation ---
 
 """
 Phase 2 reciprocal cis-architecture analysis for the PWS/AS manuscript.
@@ -1565,7 +1565,6 @@ the Phase 2 prompt explicitly filters on haplotype read coverage.
 
 
 import argparse
-import ast
 import gzip
 import math
 import re
@@ -1608,29 +1607,9 @@ GREY = "#626262"
 LIGHT_GREY = "#d0d0d0"
 DEFAULT_ICR_BED = Path("/home/rare/arlen/reference/ICR_t2t.bed")
 DEFAULT_SEG_DUP = Path("/home/rare/arlen/reference/dupseg")
-DEFAULT_BP_SOURCE_SCRIPT = Path("/home/rare/arlen/scripts/Daniela/pws_chr15_hifi_deletion_analysis.py")
-FALLBACK_PWS_BREAKPOINTS = {"BP1": 20_940_000, "BP2": 21_070_000, "BP3": 26_050_000}
-
-
-def load_pws_breakpoints_from_daniela(script_path: Path = DEFAULT_BP_SOURCE_SCRIPT) -> Dict[str, int]:
-    """Read BP1/BP2/BP3 from Daniela's CHM13 deletion-analysis script."""
-    try:
-        tree = ast.parse(script_path.read_text())
-        for node in tree.body:
-            if not isinstance(node, ast.Assign):
-                continue
-            if not any(isinstance(target, ast.Name) and target.id == "PWS_BREAKPOINTS" for target in node.targets):
-                continue
-            raw = ast.literal_eval(node.value)
-            breakpoints = {str(k): int(v) for k, v in raw.items() if str(k) in {"BP1", "BP2", "BP3"}}
-            if set(breakpoints) == {"BP1", "BP2", "BP3"}:
-                return breakpoints
-    except Exception:
-        pass
-    return dict(FALLBACK_PWS_BREAKPOINTS)
-
-
-PWS_BREAKPOINTS_T2T = load_pws_breakpoints_from_daniela()
+# T2T-CHM13 breakpoint anchors are embedded so this program never reads Python
+# source code from another project at runtime.
+PWS_BREAKPOINTS_T2T = {"BP1": 20_940_000, "BP2": 21_070_000, "BP3": 26_050_000}
 BP_HOTSPOTS_T2T = [(name, PWS_BREAKPOINTS_T2T[name]) for name in ("BP1", "BP2", "BP3")]
 BP_CLUSTER_INTERVALS_T2T = [
     {
@@ -2770,8 +2749,7 @@ def bp_hotspots_table(spec: WindowSpec) -> pd.DataFrame:
                 "position": pos,
                 "position_mb": pos / 1e6,
                 "in_plotted_range": spec.start <= pos <= spec.end,
-                "source_script": str(DEFAULT_BP_SOURCE_SCRIPT),
-                "source_variable": "PWS_BREAKPOINTS",
+                "source": "embedded_T2T_CHM13_anchor",
             }
         )
     return pd.DataFrame(rows)
@@ -3488,7 +3466,7 @@ def _phase2_main() -> None:
     ).to_csv(outdir / "phase2_run_summary.tsv", sep="\t", index=False)
     log("Done.")
 
-# --- Vendored from scripts/paper_vf/create_figure2_reciprocal_cis_architecture_improved.py ---
+# --- Embedded improved Figure 2 renderer ---
 
 """
 Create an improved Figure 2 for the Q1 genomics paper from existing Phase 2 tables.
@@ -3525,7 +3503,7 @@ from matplotlib.patches import FancyBboxPatch, Rectangle
 from matplotlib.ticker import FuncFormatter
 
 
-DEFAULT_OUTDIR = Path("/home/rare/arlen/pws-as-hifi-cis-methylation/scripts/hifi_multiomics_pipeline/06_results")
+DEFAULT_OUTDIR = Path(__file__).resolve().parents[2] / "results" / "07_figures" / "figure_2"
 DEFAULT_GTF = Path("/home/rare/arlen/reference/chm13v22.sorted.gtf")
 DEFAULT_ICR_BED = Path("/home/rare/arlen/reference/ICR_t2t.bed")
 DISPLAY_START = 18_000_000
@@ -4557,7 +4535,7 @@ def _figure2_render_main() -> None:
         "tables/Phase2_gene_track_features.tsv",
         str(args.gtf),
         str(args.icr_bed),
-        "scripts/paper_vf/create_figure2_reciprocal_cis_architecture_improved.py",
+        str(Path(__file__).resolve()),
     ]
     output_files = [
         "figures/Figure2_reciprocal_cis_architecture_improved.png",

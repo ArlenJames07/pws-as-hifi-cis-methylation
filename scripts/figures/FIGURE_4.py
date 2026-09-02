@@ -27,8 +27,8 @@ from matplotlib.patches import ConnectionPatch, Patch, Rectangle
 from scipy import stats
 
 
-DEFAULT_OUTDIR = Path("/home/rare/arlen/pws-as-hifi-cis-methylation/scripts/hifi_multiomics_pipeline/06_results")
-DEFAULT_INPUT_TABLE_DIR = Path("/home/rare/arlen/paper_vf/tables")
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_OUTDIR = PROJECT_ROOT / "results" / "07_figures" / "figure_4"
 
 FIGURE_BASENAMES = [
     "Figure_SNORD116_single_molecule_architecture",
@@ -119,7 +119,7 @@ def missing_input_tables(table_dir: Path) -> list[Path]:
 
 
 def resolve_input_table_dir(outdir: Path, requested_table_dir: Path | None = None) -> Path:
-    candidates = [requested_table_dir] if requested_table_dir is not None else [outdir / "tables", DEFAULT_INPUT_TABLE_DIR]
+    candidates = [requested_table_dir] if requested_table_dir is not None else [outdir / "tables"]
     checked: list[Path] = []
     for candidate in candidates:
         if candidate is None:
@@ -130,8 +130,8 @@ def resolve_input_table_dir(outdir: Path, requested_table_dir: Path | None = Non
             return candidate
     details = "\n".join(f"- {path}" for path in checked)
     raise FileNotFoundError(
-        "Figure 4 input tables were not found. Run the Figure 4 table-generation step first, "
-        "or pass --table-dir to a directory containing the Figure4_*.tsv inputs.\n"
+        "Figure 4 input tables were not found. Pass --table-dir to a directory containing "
+        "the required Figure4_*.tsv inputs, or place them in OUTDIR/tables.\n"
         f"Checked:\n{details}"
     )
 
@@ -2009,17 +2009,17 @@ def write_report(
         "Figure generation command:",
         "",
         "```bash",
-        "python3 FIGURE_4.py --outdir /home/rare/arlen/pws-as-hifi-cis-methylation/scripts/hifi_multiomics_pipeline/06_results",
+        f"python3 scripts/figures/FIGURE_4.py --outdir {outdir}",
         "```",
         "",
         "Convenience outputs written by the renderer:",
         "",
-        f"- `/home/rare/arlen/pws-as-hifi-cis-methylation/scripts/hifi_multiomics_pipeline/06_results/figures/{FIGURE_BASENAMES[0]}.png`",
-        f"- `/home/rare/arlen/pws-as-hifi-cis-methylation/scripts/hifi_multiomics_pipeline/06_results/figures/{FIGURE_BASENAMES[0]}.pdf`",
-        f"- `/home/rare/arlen/pws-as-hifi-cis-methylation/scripts/hifi_multiomics_pipeline/06_results/figures/{FIGURE_BASENAMES[0]}.svg`",
-        f"- `/home/rare/arlen/pws-as-hifi-cis-methylation/scripts/hifi_multiomics_pipeline/06_results/figures/{FIGURE_BASENAMES[0]}.jpeg`",
-        f"- `/home/rare/arlen/pws-as-hifi-cis-methylation/scripts/hifi_multiomics_pipeline/06_results/reports/{REPORT_NAME}`",
-        f"- `/home/rare/arlen/pws-as-hifi-cis-methylation/scripts/hifi_multiomics_pipeline/06_results/reports/report.md`",
+        f"- `{outdir / 'figures' / (FIGURE_BASENAMES[0] + '.png')}`",
+        f"- `{outdir / 'figures' / (FIGURE_BASENAMES[0] + '.pdf')}`",
+        f"- `{outdir / 'figures' / (FIGURE_BASENAMES[0] + '.svg')}`",
+        f"- `{outdir / 'figures' / (FIGURE_BASENAMES[0] + '.jpeg')}`",
+        f"- `{outdir / 'reports' / REPORT_NAME}`",
+        f"- `{outdir / 'reports' / 'report.md'}`",
         "",
         "## Main result",
         "",
@@ -2040,7 +2040,7 @@ def main() -> None:
         "--table-dir",
         type=Path,
         default=None,
-        help="Directory containing precomputed Figure4_*.tsv input tables. Defaults to outdir/tables, then the original paper_vf tables.",
+        help="Directory containing the required Figure4_*.tsv input tables. Defaults only to OUTDIR/tables.",
     )
     args = parser.parse_args()
 

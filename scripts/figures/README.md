@@ -2,6 +2,34 @@
 
 The canonical figure programs are `FIGURE_1.py` through `FIGURE_5.py`.
 
+When run directly without `--outdir`, each script writes beneath the repository
+results directory:
+
+```text
+results/07_figures/
+├── figure_1/{figures,tables,logs,reports}/
+├── figure_2/{figures,tables,reports}/
+├── figure_3/{figures,tables,logs,reports}/
+├── figure_4/{figures,tables,reports}/
+└── figure_5/{figures,tables,reports}/
+```
+
+For example:
+
+```bash
+python3 scripts/figures/FIGURE_1.py
+```
+
+creates `results/07_figures/figure_1/figures/Figure1.png` and the associated
+tables. An explicit `--outdir` still overrides the default.
+
+After editing Figure 1 layout or styling, redraw it from its existing plotting
+tables without rereading the large BAM and methylation files:
+
+```bash
+python3 scripts/figures/FIGURE_1.py --render-only
+```
+
 The shared 17-sample cohort includes six DiGeorge samples: `008D`, `009D`,
 `010D`, `011D`, `012D`, and `015D`. They are recognized as the `DIGEORGE`
 analysis group (displayed as `DiGeorge`) in cohort-wide summaries. Analyses
