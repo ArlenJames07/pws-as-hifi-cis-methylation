@@ -303,29 +303,6 @@ nextflow run main.nf -profile test -stub-run
 This checks the DSL2 graph, sample parsing, channel joins, declared outputs,
 and publish paths. It does not validate scientific results.
 
-## What belongs in Git
-
-Commit workflow source, configuration templates, environment definitions,
-documentation, and tiny test fixtures. Do not commit participant BAM/VCF/BED
-files, reference genomes, Nextflow cache, or generated results. The included
-`.gitignore` enforces those boundaries.
-
-From the `main` branch, review and stage this reproducibility change with:
-
-```bash
-git status --short
-git add \
-  .gitignore README.md main.nf nextflow.config nextflow_schema.json \
-  assets conf envs modules tests scripts/figures/README.md
-git diff --cached --stat
-git diff --cached
-git commit -m "Add reproducible Nextflow HiFi analysis pipeline"
-git push origin main
-```
-
-Always inspect `git diff --cached` before the commit. In particular, confirm
-that no private genomic data or local absolute paths were staged.
-
 ## Data availability and privacy
 
 Raw human genomic data are not included because of participant privacy,
