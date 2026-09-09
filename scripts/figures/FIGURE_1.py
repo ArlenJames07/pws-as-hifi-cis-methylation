@@ -1,55 +1,4 @@
-#!/usr/bin/env python3
-"""
-Publication-grade Figure 1 generator for the PWS/AS HiFi cis-methylation manuscript.
 
-Scientific question
--------------------
-Can reciprocal PWS and Angelman chromosome-15 deletions be used as natural
-hemizygous configurations to reconstruct parental-like methylation states at
-the SNRPN/SNHG14 imprinting centre, and are those states supported by raw
-MM/ML-tagged HiFi molecules, structural evidence and participant-level QC?
-
-Main figure
------------
-a. Reciprocal molecular configurations.
-b. Raw ModBAMtools single-molecule evidence from prespecified representatives.
-c. Complete-cohort allele/haplotype IC methylation with descriptive 95%
-   CpG-bootstrap intervals and participant-level PWS-DEL vs AS-DEL inference.
-d. Coverage, CpG and phasing support.
-
-Publication safeguards
-----------------------
-- Missing methylation, low support, structurally unresolved states and confirmed
-  deletions are distinct categories.
-- A chromosome is labelled deleted only when available SV/CNV evidence confirms
-  a deletion spanning the complete IC.
-- Formal group inference uses participants as the independent unit.
-- All raw ModBAM profiles can be generated as Extended Data.
-- Source-data tables, configuration, software versions, preflight QC and an
-  input manifest/checksum record are written automatically.
-- The IC is treated as an anchoring locus for parental-like identity, not as an
-  independent blinded diagnostic validation assay.
-
-Key outputs
------------
-tables/Figure1_preflight_QC.tsv
-tables/Figure1_structural_IC_evidence.tsv
-tables/Figure1B_modbamtools_representatives.tsv
-tables/Figure1C_allele_methylation_matrix.tsv
-tables/Figure1C_sample_level_inference.tsv
-tables/Figure1D_coverage_phasing_support.tsv
-source_data/Figure1B_single_molecule_MM_ML_source_data.tsv.gz
-source_data/Figure1C_cohort_methylation_source_data.tsv
-extended_data/ExtendedData_Figure1_all_modbamtools.{png,pdf}
-figures/Figure1_mechanistic.{png,pdf,svg}
-Figure1_input_manifest.tsv
-Figure1_software_versions.json
-Figure1_configuration.json
-reports/Figure1_report.md  # extensive results report with embedded supplementary images
-
-No command-line arguments are required. Edit USER CONFIGURATION and run:
-    python3 scripts/figures/FIGURE_1.py
-"""
 
 from __future__ import annotations
 
@@ -100,7 +49,7 @@ PWS_IC_START = 22_691_258
 PWS_IC_END = 22_693_494
 PWS_IC_NAME = "ICR_893_SNHG14_SNRPN_SNURF"
 
-# Raw single-molecule window for Figure 1B. This is intentionally a little
+# Raw single-molecule window for Figure 1A. This is intentionally a little
 # broader than the diagnostic IC interval so that the local transition is visible.
 MODBAM_REGION_START = 22_690_500
 MODBAM_REGION_END = 22_695_000
@@ -151,7 +100,7 @@ MODBAMTOOLS_BIN = "modbamtools"
 # the indexed annotation required by ModBAMtools.
 MODBAM_GTF: Path | None = None
 
-# Raw single-molecule interval plotted in Figure 1B.
+# Raw single-molecule interval plotted in Figure 1A.
 MODBAM_PLOT_REGION = MODBAM_REGION
 
 # Execution switches. Normally all three remain False for a complete run.
@@ -207,22 +156,36 @@ MODBAM_GROUP_ORDER = [
     "PWS-mUPD",
 ]
 
-MATERNAL_THRESHOLD = 0.85
-PATERNAL_THRESHOLD = 0.15
+# Primary parental-state assignment is NOT based on fixed beta cutoffs.
+# Maternal-like and paternal-like reference centroids are estimated automatically
+# from the unaffected controls in each run. For each control, the more methylated
+# haplotype anchors the maternal-like state and the less methylated haplotype
+# anchors the paternal-like state; HP1/HP2 labels themselves are not parental.
+# The decision boundary is the midpoint between the two empirical centroids.
+PARENTAL_REFERENCE_METHOD = "unaffected-control median centroids"
+CONTROL_REFERENCE_LEAVE_ONE_OUT = True
+
+# These extreme-state thresholds are retained ONLY as a supplementary sensitivity
+# analysis. They are not used for the primary parental-state calls in Figure 1.
+EXTREME_MATERNAL_THRESHOLD = 0.85
+EXTREME_PATERNAL_THRESHOLD = 0.15
 
 # Depth-aware methylation QC.
-# We do NOT convert a low-depth haplotype into "missing". Any observed estimate
-# is retained and its support is reported. State assignment requires a small
-# minimum amount of evidence; "nominal/strong support" remains more stringent.
+# We do NOT convert a lower-depth haplotype into "missing". State assignment
+# requires the minimum evidence below. The higher-coverage reference is reported
+# descriptively in Figure 1C; falling below it is not a preflight
+# warning and does not invalidate an otherwise estimable parental-state call.
 MIN_STATE_CPGS = 3
 MIN_STATE_MEAN_COVERAGE = 2.0
-NOMINAL_CPGS = 5
-NOMINAL_MEAN_COVERAGE = 10.0
+HIGHER_COVERAGE_CPGS = 5
+HIGHER_COVERAGE_MEAN_COVERAGE = 10.0
 MIN_MODBAM_FALLBACK_MOLECULES = 3
 
-# Backward-compatible names used elsewhere in the script.
-MIN_MEAN_COVERAGE = NOMINAL_MEAN_COVERAGE
-MIN_CPGS = NOMINAL_CPGS
+# Backward-compatible aliases retained for downstream configuration readers.
+NOMINAL_CPGS = HIGHER_COVERAGE_CPGS
+NOMINAL_MEAN_COVERAGE = HIGHER_COVERAGE_MEAN_COVERAGE
+MIN_MEAN_COVERAGE = HIGHER_COVERAGE_MEAN_COVERAGE
+MIN_CPGS = HIGHER_COVERAGE_CPGS
 
 # HiFiCNV / deletion classification on T2T-CHM13v2.0.
 # Coordinates are the same chr15 landmarks used by the manuscript Figure 5.
@@ -373,13 +336,35 @@ class BedStats:
 
     @property
     def sufficient(self) -> bool:
-        """Nominal/strong support; values below this are retained, not discarded."""
+        """Higher-coverage reference category used for descriptive QC only."""
         return (
             self.mean_methylation is not None
-            and self.n_cpgs >= NOMINAL_CPGS
+            and self.n_cpgs >= HIGHER_COVERAGE_CPGS
             and self.mean_coverage is not None
-            and self.mean_coverage >= NOMINAL_MEAN_COVERAGE
+            and self.mean_coverage >= HIGHER_COVERAGE_MEAN_COVERAGE
         )
+
+@dataclass(frozen=True)
+class ParentalReferenceModel:
+    """Empirical parental-like methylation references learned from controls.
+
+    The model is intentionally simple and transparent. Each unaffected control
+    contributes its lower- and higher-methylated IC haplotype. The median of the
+    high values defines the maternal-like reference, the median of the low values
+    defines the paternal-like reference, and their midpoint is the equal-distance
+    decision boundary. This removes the fixed 0.85/0.15 cutoffs from the primary
+    analysis while preserving them as a Supplementary sensitivity analysis.
+    """
+    maternal_reference: float
+    paternal_reference: float
+    decision_boundary: float
+    control_sample_ids: tuple[str, ...]
+    method: str = PARENTAL_REFERENCE_METHOD
+
+    @property
+    def separation(self) -> float:
+        return self.maternal_reference - self.paternal_reference
+
 
 def validate_configuration() -> None:
     """Fail early when the hard-coded configuration is inconsistent."""
@@ -493,7 +478,7 @@ def find_sample_file(directory: Path, sample_id: str, suffix: str) -> Path | Non
 
 def find_modbam_file(directory: Path, sample_id: str) -> Path | None:
     """
-    Prefer phased BAMs because Figure 1B uses HP tags when biologically
+    Prefer phased BAMs because Figure 1A uses HP tags when biologically
     meaningful. Fall back to any sample BAM only if no phased BAM is present.
     """
     if not directory.exists():
@@ -611,7 +596,7 @@ def read_modbam_haplotype_region_stats(
     start: int,
     end: int,
 ) -> BedStats:
-    """Recover haplotype-specific methylation directly from MM/ML-tagged reads.
+    """Quantify haplotype-specific methylation directly from MM/ML-tagged reads.
 
     This is used only when the corresponding pb-CpG-tools haplotype BED has no
     estimable values. It prevents a lower-depth sample from being labelled
@@ -619,15 +604,15 @@ def read_modbam_haplotype_region_stats(
 
     The summary is calculated per reference position from MM/ML probabilities,
     then averaged across observed positions. The data source is explicitly
-    recorded so BED-derived and ModBAM-fallback estimates remain auditable.
+    recorded so BED-derived and direct ModBAM estimates remain auditable.
     """
     if bam_path is None or not Path(bam_path).exists():
-        return BedStats(data_source="modBAM fallback unavailable")
+        return BedStats(data_source="direct ModBAM unavailable")
 
     try:
         import pysam
     except ImportError:
-        return BedStats(data_source="modBAM fallback unavailable: pysam missing")
+        return BedStats(data_source="direct ModBAM unavailable: pysam missing")
 
     bam_path = Path(bam_path)
     position_values: dict[int, list[float]] = defaultdict(list)
@@ -685,12 +670,12 @@ def read_modbam_haplotype_region_stats(
                 if contributed:
                     molecules.add(read.query_name)
     except Exception as exc:
-        return BedStats(data_source=f"modBAM fallback failed: {exc}")
+        return BedStats(data_source=f"direct ModBAM quantification failed: {exc}")
 
     if not position_values:
         return BedStats(
             n_molecules=len(molecules),
-            data_source="modBAM MM/ML fallback",
+            data_source="direct ModBAM MM/ML",
         )
 
     positions = sorted(position_values)
@@ -726,11 +711,11 @@ def read_modbam_haplotype_region_stats(
         ci_high=ci_high,
         values_by_pos={pos: (float(np.mean(position_values[pos])), float(len(position_values[pos]))) for pos in positions},
         n_molecules=len(molecules),
-        data_source="modBAM MM/ML fallback",
+        data_source="direct ModBAM MM/ML",
     )
 
 
-def rescue_low_depth_haplotype_stats(
+def complete_haplotype_stats_from_modbam(
     files: dict[str, Path | None],
     stats: dict[str, BedStats],
     mechanism: str,
@@ -745,73 +730,239 @@ def rescue_low_depth_haplotype_stats(
             current = stats[label]
             if current.estimable:
                 continue
-            fallback = read_modbam_haplotype_region_stats(
+            direct_stats = read_modbam_haplotype_region_stats(
                 Path(modbam), hp, PWS_IC_START, PWS_IC_END
             )
-            # Prefer the fallback if it supplies more informative CpG positions.
+            # Prefer direct ModBAM evidence if it supplies more informative CpGs.
             if (
-                fallback.mean_methylation is not None
-                and fallback.n_molecules is not None
-                and fallback.n_molecules >= MIN_MODBAM_FALLBACK_MOLECULES
-                and fallback.n_cpgs > current.n_cpgs
+                direct_stats.mean_methylation is not None
+                and direct_stats.n_molecules is not None
+                and direct_stats.n_molecules >= MIN_MODBAM_FALLBACK_MOLECULES
+                and direct_stats.n_cpgs > current.n_cpgs
             ):
-                stats[label] = fallback
+                stats[label] = direct_stats
 
     elif mechanism in {"PWS-DEL", "AS-DEL"}:
         current = stats["combined_fallback"]
         if not current.estimable:
-            fallback = read_modbam_haplotype_region_stats(
+            direct_stats = read_modbam_haplotype_region_stats(
                 Path(modbam), None, PWS_IC_START, PWS_IC_END
             )
             if (
-                fallback.mean_methylation is not None
-                and fallback.n_molecules is not None
-                and fallback.n_molecules >= MIN_MODBAM_FALLBACK_MOLECULES
-                and fallback.n_cpgs > current.n_cpgs
+                direct_stats.mean_methylation is not None
+                and direct_stats.n_molecules is not None
+                and direct_stats.n_molecules >= MIN_MODBAM_FALLBACK_MOLECULES
+                and direct_stats.n_cpgs > current.n_cpgs
             ):
-                stats["combined_fallback"] = fallback
+                stats["combined_fallback"] = direct_stats
 
     return stats
 
 
-def methylation_pattern(stats: BedStats) -> str:
-    """Depth-aware state assignment.
+def _control_sample_ids() -> list[str]:
+    return [
+        sample_id
+        for sample_id, _clinical, mechanism in sorted_cohort()
+        if mechanism == "Control"
+    ]
 
-    Low-depth estimates are kept in the figure and source data, but are not
-    forced into a parental-state class unless they pass the minimal estimable
-    threshold. This avoids systematically penalizing lower-depth cohorts while
-    still separating uncertainty from biological absence.
+
+def estimate_parental_reference_model(
+    stats_by_sample: dict[str, dict[str, BedStats]],
+    exclude_sample_id: str | None = None,
+) -> ParentalReferenceModel:
+    """Estimate maternal-like and paternal-like IC centroids from controls.
+
+    No fixed methylation cutoff is used. For each eligible unaffected control,
+    the two observed haplotype beta values are sorted: the higher value anchors
+    the maternal-like state and the lower value anchors the paternal-like state.
+    The cohort reference is the median of those per-control anchors.
+
+    When a control itself is classified and CONTROL_REFERENCE_LEAVE_ONE_OUT is
+    enabled, that sample is excluded from reference estimation to avoid using a
+    control to define and validate its own state. With two controls this leaves
+    one independent control pair for the held-out sample.
     """
-    beta = stats.mean_methylation
+    high_values: list[float] = []
+    low_values: list[float] = []
+    used_ids: list[str] = []
+
+    for sample_id in _control_sample_ids():
+        if exclude_sample_id is not None and sample_id == exclude_sample_id:
+            continue
+        sample_stats = stats_by_sample.get(sample_id, {})
+        h1 = sample_stats.get("hap1")
+        h2 = sample_stats.get("hap2")
+        if h1 is None or h2 is None:
+            continue
+        b1 = safe_float(h1.mean_methylation)
+        b2 = safe_float(h2.mean_methylation)
+        if b1 is None or b2 is None:
+            continue
+        if not (h1.estimable and h2.estimable):
+            continue
+        low, high = sorted((float(b1), float(b2)))
+        low_values.append(low)
+        high_values.append(high)
+        used_ids.append(sample_id)
+
+    if not high_values or not low_values:
+        raise RuntimeError(
+            "Cannot estimate parental methylation references: no unaffected "
+            "control has two estimable IC haplotypes."
+        )
+
+    maternal = float(np.median(high_values))
+    paternal = float(np.median(low_values))
+    if not np.isfinite(maternal) or not np.isfinite(paternal) or maternal <= paternal:
+        raise RuntimeError(
+            "Invalid control-derived parental reference model: maternal-like "
+            f"centroid={maternal}, paternal-like centroid={paternal}."
+        )
+
+    return ParentalReferenceModel(
+        maternal_reference=maternal,
+        paternal_reference=paternal,
+        decision_boundary=(maternal + paternal) / 2.0,
+        control_sample_ids=tuple(used_ids),
+    )
+
+
+def parental_reference_for_sample(
+    sample_id: str,
+    mechanism: str,
+    stats_by_sample: dict[str, dict[str, BedStats]],
+    global_reference: ParentalReferenceModel,
+) -> ParentalReferenceModel:
+    """Return global or leave-one-control-out reference for one sample."""
+    if mechanism == "Control" and CONTROL_REFERENCE_LEAVE_ONE_OUT:
+        try:
+            loo = estimate_parental_reference_model(
+                stats_by_sample, exclude_sample_id=sample_id
+            )
+            return loo
+        except RuntimeError:
+            pass
+    return global_reference
+
+
+def reference_relative_metrics(
+    stats: BedStats,
+    reference: ParentalReferenceModel,
+) -> dict[str, Any]:
+    """Continuous distance metrics relative to empirical parental centroids."""
+    beta = safe_float(stats.mean_methylation)
+    if beta is None:
+        return {
+            "distance_to_maternal": None,
+            "distance_to_paternal": None,
+            "nearest_reference": "unresolved",
+            "reference_margin": None,
+            "parental_axis_score": None,
+        }
+    dm = abs(beta - reference.maternal_reference)
+    dp = abs(beta - reference.paternal_reference)
+    nearest = "maternal" if dm < dp else "paternal" if dp < dm else "equidistant"
+    denom = dm + dp
+    margin = abs(dp - dm) / denom if denom > 0 else 0.0
+    separation = reference.separation
+    axis = (2.0 * (beta - reference.decision_boundary) / separation) if separation > 0 else None
+    return {
+        "distance_to_maternal": dm,
+        "distance_to_paternal": dp,
+        "nearest_reference": nearest,
+        "reference_margin": margin,
+        # -1 at the paternal centroid, +1 at the maternal centroid. Values may
+        # extend beyond that range if an observation is more extreme than a reference.
+        "parental_axis_score": axis,
+    }
+
+
+def methylation_pattern(
+    stats: BedStats,
+    reference: ParentalReferenceModel,
+) -> str:
+    """Depth-aware, control-calibrated parental-state assignment.
+
+    Primary state calls no longer use fixed beta thresholds. An estimable allele
+    is maternal-like when its descriptive CpG-bootstrap interval lies entirely
+    above the empirical equal-distance boundary and paternal-like when the
+    interval lies entirely below it. Intervals overlapping the boundary are
+    labelled uncertain rather than being forced into either parental state.
+
+    If a descriptive interval is unavailable, the nearest empirical reference
+    centroid is used as a fallback. The CpG interval is a measurement-support
+    device only; participant-level biological inference remains sample-based.
+    """
+    beta = safe_float(stats.mean_methylation)
     if beta is None:
         return "missing"
     if not stats.estimable:
         return "low-support"
-    if beta >= MATERNAL_THRESHOLD:
+
+    lo = safe_float(stats.ci_low)
+    hi = safe_float(stats.ci_high)
+    boundary = reference.decision_boundary
+    if lo is not None and hi is not None:
+        if lo > boundary:
+            return "maternal-pattern"
+        if hi < boundary:
+            return "paternal-pattern"
+        return "uncertain"
+
+    metrics = reference_relative_metrics(stats, reference)
+    if metrics["nearest_reference"] == "maternal":
         return "maternal-pattern"
-    if beta <= PATERNAL_THRESHOLD:
+    if metrics["nearest_reference"] == "paternal":
         return "paternal-pattern"
-    return "intermediate"
+    return "uncertain"
 
 
 def pattern_short(pattern: str) -> str:
     return {
         "maternal-pattern": "M",
         "paternal-pattern": "P",
+        "uncertain": "U",
         "low-support": "low",
         "absent": "absent",
     }.get(pattern, "?")
 
 
-def pattern_confidence(stats: BedStats) -> float:
-    if stats.mean_methylation is None or stats.n_cpgs < MIN_CPGS:
-        return 0.0
-    distance = abs(stats.mean_methylation - 0.5)
-    max_threshold_distance = MATERNAL_THRESHOLD - 0.5
-    conf = distance / max_threshold_distance
-    if stats.mean_coverage is not None and stats.mean_coverage < MIN_MEAN_COVERAGE:
-        conf *= max(0.25, stats.mean_coverage / MIN_MEAN_COVERAGE)
-    return float(np.clip(conf, 0.0, 1.0))
+def build_parental_reference_rows(
+    stats_by_sample: dict[str, dict[str, BedStats]],
+    global_reference: ParentalReferenceModel,
+) -> list[dict[str, Any]]:
+    """Auditable table of global and leave-one-control-out references."""
+    rows: list[dict[str, Any]] = [{
+        "scope": "global",
+        "excluded_control": "",
+        "controls_used": ";".join(global_reference.control_sample_ids),
+        "maternal_reference_beta": fmt(global_reference.maternal_reference),
+        "paternal_reference_beta": fmt(global_reference.paternal_reference),
+        "decision_boundary_beta": fmt(global_reference.decision_boundary),
+        "reference_separation": fmt(global_reference.separation),
+        "method": global_reference.method,
+    }]
+
+    if CONTROL_REFERENCE_LEAVE_ONE_OUT:
+        for sample_id in _control_sample_ids():
+            try:
+                ref = estimate_parental_reference_model(
+                    stats_by_sample, exclude_sample_id=sample_id
+                )
+            except RuntimeError:
+                continue
+            rows.append({
+                "scope": "leave-one-control-out",
+                "excluded_control": sample_id,
+                "controls_used": ";".join(ref.control_sample_ids),
+                "maternal_reference_beta": fmt(ref.maternal_reference),
+                "paternal_reference_beta": fmt(ref.paternal_reference),
+                "decision_boundary_beta": fmt(ref.decision_boundary),
+                "reference_separation": fmt(ref.separation),
+                "method": ref.method,
+            })
+    return rows
 
 
 # ---------------------------------------------------------------------------
@@ -1827,13 +1978,19 @@ def build_preflight_qc(
     structural: dict[str, dict[str, Any]],
     stats_by_sample: dict[str, dict[str, BedStats]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Scientific preflight that distinguishes low depth from missing biology."""
+    """Scientific preflight that distinguishes usable lower depth from failure.
+
+    Only missing or non-estimable methylation evidence can produce a support
+    warning. An estimate below the higher-coverage reference remains a PASS
+    when it meets the prespecified state-assignment minimum.
+    """
     rows = []
     for sample_id, _clinical, mechanism in sorted_cohort():
         files = sample_files[sample_id]
 
         # Core files. Haplotype BEDs are no longer hard-required because an
-        # MM/ML+HP ModBAM can rescue low-depth haplotype estimates.
+        # MM/ML+HP ModBAM can directly quantify haplotypes when BED estimates
+        # are absent or non-estimable.
         required = ["bam", "combined_bed", "modbam"]
         missing = [
             k for k in required
@@ -1853,6 +2010,7 @@ def build_preflight_qc(
 
         s = structural[sample_id]
         issues: list[str] = []
+        support_notes: list[str] = []
         status = "PASS"
 
         if missing:
@@ -1882,8 +2040,8 @@ def build_preflight_qc(
                 issues.append("unexpected chr15 IC deletion evidence in non-deletion sample")
                 status = "FAIL"
 
-        # Depth-aware methylation support: low depth is a warning, never recoded
-        # as chromosome absence.
+        # Depth-aware methylation support. Lower coverage is descriptive when
+        # the estimate remains state-estimable; it is not a failed sample.
         hap_support = {}
         if stats_by_sample and sample_id in stats_by_sample:
             st = stats_by_sample[sample_id]
@@ -1895,14 +2053,20 @@ def build_preflight_qc(
                     issues.append(f"{label}: no methylation estimate")
                     if status == "PASS":
                         status = "WARN"
-                elif not bst.sufficient:
+                elif not bst.estimable:
                     issues.append(
-                        f"{label}: limited depth/support "
+                        f"{label}: insufficient evidence for state assignment "
                         f"(CpGs={bst.n_cpgs}, mean_cov={fmt(bst.mean_coverage,1)}, "
                         f"source={bst.data_source})"
                     )
                     if status == "PASS":
                         status = "WARN"
+                elif not bst.sufficient:
+                    support_notes.append(
+                        f"{label}: state-estimable below higher-coverage reference "
+                        f"(CpGs={bst.n_cpgs}, mean_cov={fmt(bst.mean_coverage,1)}, "
+                        f"source={bst.data_source})"
+                    )
 
         rows.append({
             "sample_id": sample_id,
@@ -1917,6 +2081,7 @@ def build_preflight_qc(
             "sv_note": s["sv_note"],
             "cnv_note": s["cnv_note"],
             "haplotype_support": ";".join(f"{k}={v}" for k, v in hap_support.items()),
+            "support_notes": "; ".join(support_notes),
             "issues": "; ".join(issues),
         })
     return rows
@@ -1936,21 +2101,37 @@ def _support_category(stats: BedStats) -> str:
     if stats.mean_methylation is None:
         return "missing"
     if stats.sufficient:
-        return "nominal"
+        return "higher_coverage"
     if stats.estimable:
-        return "limited_depth"
-    return "very_low_support"
+        return "state_estimable"
+    return "insufficient"
 
 
 def build_assignments(
     sample_files: dict[str, dict[str, Path | None]],
     structural_by_sample: dict[str, dict[str, Any]],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, dict[str, BedStats]]]:
+) -> tuple[
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    dict[str, dict[str, BedStats]],
+    ParentalReferenceModel,
+    list[dict[str, Any]],
+]:
+    """Build methylation assignments using control-calibrated references.
+
+    The function is intentionally two-pass. First, all raw/bed-rescued IC
+    methylation statistics are collected without imposing parental labels.
+    Second, unaffected controls define empirical maternal-like and paternal-like
+    centroids, after which every allele/haplotype is classified relative to those
+    centroids. Controls themselves use a leave-one-control-out reference when
+    possible.
+    """
     assignment_rows: list[dict[str, Any]] = []
     matrix_rows: list[dict[str, Any]] = []
     stats_by_sample: dict[str, dict[str, BedStats]] = {}
 
-    for sample_id, clinical, mechanism in sorted_cohort():
+    # Pass 1: collect quantitative methylation summaries only.
+    for sample_id, _clinical, mechanism in sorted_cohort():
         files = sample_files[sample_id]
         stats = {
             "hap1": read_bed_region(
@@ -1963,15 +2144,32 @@ def build_assignments(
                 files["combined_bed"], PWS_IC_START, PWS_IC_END, keep_values=True
             ),
         }
+        stats_by_sample[sample_id] = complete_haplotype_stats_from_modbam(
+            files, stats, mechanism
+        )
 
-        # Lower sequencing depth can cause pb-CpG-tools to emit sparse/empty
-        # haplotype BEDs despite a valid HiPhase block. Rescue those cases from
-        # the same MM/ML+HP-tagged ModBAM and record the source explicitly.
-        stats = rescue_low_depth_haplotype_stats(files, stats, mechanism)
-        stats_by_sample[sample_id] = stats
+    global_reference = estimate_parental_reference_model(stats_by_sample)
+    reference_rows = build_parental_reference_rows(
+        stats_by_sample, global_reference
+    )
+
+    # Pass 2: classify each quantitative estimate against empirical references.
+    for sample_id, clinical, mechanism in sorted_cohort():
+        stats = stats_by_sample[sample_id]
+        sample_reference = parental_reference_for_sample(
+            sample_id, mechanism, stats_by_sample, global_reference
+        )
+        reference_scope = (
+            "leave-one-control-out"
+            if mechanism == "Control"
+            and CONTROL_REFERENCE_LEAVE_ONE_OUT
+            and sample_id not in sample_reference.control_sample_ids
+            else "global"
+        )
 
         for label, bed_stats in stats.items():
-            patt = methylation_pattern(bed_stats)
+            patt = methylation_pattern(bed_stats, sample_reference)
+            metrics = reference_relative_metrics(bed_stats, sample_reference)
             matrix_rows.append({
                 "sample_id": sample_id,
                 "molecular_mechanism": mechanism,
@@ -1983,9 +2181,26 @@ def build_assignments(
                 "n_molecules": bed_stats.n_molecules if bed_stats.n_molecules is not None else "",
                 "mean_coverage": fmt(bed_stats.mean_coverage),
                 "pattern": patt,
+                "pattern_short": pattern_short(patt),
                 "support_category": _support_category(bed_stats),
-                "coverage_status": "sufficient" if bed_stats.sufficient else "limited",
+                "coverage_status": (
+                    "higher_coverage"
+                    if bed_stats.sufficient
+                    else "state_estimable"
+                    if bed_stats.estimable
+                    else "insufficient"
+                ),
                 "data_source": bed_stats.data_source,
+                "classification_method": "control-calibrated reference + descriptive CI",
+                "reference_scope": reference_scope,
+                "maternal_reference_beta": fmt(sample_reference.maternal_reference),
+                "paternal_reference_beta": fmt(sample_reference.paternal_reference),
+                "decision_boundary_beta": fmt(sample_reference.decision_boundary),
+                "distance_to_maternal_reference": fmt(metrics["distance_to_maternal"]),
+                "distance_to_paternal_reference": fmt(metrics["distance_to_paternal"]),
+                "nearest_parental_reference": metrics["nearest_reference"],
+                "reference_margin": fmt(metrics["reference_margin"]),
+                "parental_axis_score": fmt(metrics["parental_axis_score"]),
             })
 
         if mechanism in {"PWS-DEL", "AS-DEL"}:
@@ -2005,7 +2220,8 @@ def build_assignments(
             )
 
         for label, bed_stats, source in rows_for_sample:
-            patt = methylation_pattern(bed_stats)
+            patt = methylation_pattern(bed_stats, sample_reference)
+            metrics = reference_relative_metrics(bed_stats, sample_reference)
             if mechanism == "PWS-mUPD":
                 parental_assignment = (
                     "maternal-pattern" if patt == "maternal-pattern" else "unassigned"
@@ -2032,16 +2248,32 @@ def build_assignments(
                 "support_category": _support_category(bed_stats),
                 "methylation_pattern": patt,
                 "parental_assignment": parental_assignment,
+                "nearest_parental_reference": metrics["nearest_reference"],
+                "maternal_reference_beta": fmt(sample_reference.maternal_reference),
+                "paternal_reference_beta": fmt(sample_reference.paternal_reference),
+                "decision_boundary_beta": fmt(sample_reference.decision_boundary),
+                "distance_to_maternal_reference": fmt(metrics["distance_to_maternal"]),
+                "distance_to_paternal_reference": fmt(metrics["distance_to_paternal"]),
+                "reference_margin": fmt(metrics["reference_margin"]),
+                "parental_axis_score": fmt(metrics["parental_axis_score"]),
                 "expected_pattern": expected,
                 "structural_ic_deletion_status": structural_by_sample[sample_id]["ic_deletion_status"],
                 "note": (
-                    "IC methylation anchors parental-like identity. Lower-depth "
-                    "haplotypes are retained with explicit support labels; empty "
-                    "haplotype BEDs may be rescued from MM/ML+HP-tagged ModBAM."
+                    "Primary parental-like state is learned from unaffected-control "
+                    "methylation centroids; fixed 0.85/0.15 thresholds are used "
+                    "only for Supplementary sensitivity analysis. State-estimable "
+                    "lower-coverage haplotypes are retained with continuous support "
+                    "metrics and are not treated as failed samples."
                 ),
             })
 
-    return assignment_rows, matrix_rows, stats_by_sample
+    return (
+        assignment_rows,
+        matrix_rows,
+        stats_by_sample,
+        global_reference,
+        reference_rows,
+    )
 
 
 def _state_cell(status: str, row: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -2050,7 +2282,11 @@ def _state_cell(status: str, row: dict[str, Any] | None = None) -> dict[str, Any
         return {
             "source": status, "mean_methylation": None, "ci_low": None, "ci_high": None,
             "pattern": status, "pattern_short": label, "n_CpGs": 0, "n_molecules": None, "mean_coverage": None,
-            "coverage_status": status, "status": status, "is_absent": status == "deleted",
+            "coverage_status": status,
+            "nearest_parental_reference": "", "maternal_reference_beta": None, "paternal_reference_beta": None,
+            "decision_boundary_beta": None, "distance_to_maternal_reference": None,
+            "distance_to_paternal_reference": None, "reference_margin": None, "parental_axis_score": None,
+            "status": status, "is_absent": status == "deleted",
         }
     if row is None:
         return _state_cell("missing")
@@ -2061,9 +2297,18 @@ def _state_cell(status: str, row: dict[str, Any] | None = None) -> dict[str, Any
     return {
         "source": row.get("data_source") or row.get("haplotype_or_source", ""), "mean_methylation": value,
         "ci_low": safe_float(row.get("ci_low")), "ci_high": safe_float(row.get("ci_high")),
-        "pattern": patt, "pattern_short": pattern_short(patt), "n_CpGs": int(row.get("n_CpGs", 0) or 0),
+        "pattern": patt, "pattern_short": row.get("pattern_short") or pattern_short(patt),
+        "n_CpGs": int(row.get("n_CpGs", 0) or 0),
         "n_molecules": int(row.get("n_molecules", 0) or 0) if str(row.get("n_molecules", "")).strip() else None,
         "mean_coverage": safe_float(row.get("mean_coverage")), "coverage_status": row.get("coverage_status", ""),
+        "nearest_parental_reference": row.get("nearest_parental_reference", ""),
+        "maternal_reference_beta": safe_float(row.get("maternal_reference_beta")),
+        "paternal_reference_beta": safe_float(row.get("paternal_reference_beta")),
+        "decision_boundary_beta": safe_float(row.get("decision_boundary_beta")),
+        "distance_to_maternal_reference": safe_float(row.get("distance_to_maternal_reference")),
+        "distance_to_paternal_reference": safe_float(row.get("distance_to_paternal_reference")),
+        "reference_margin": safe_float(row.get("reference_margin")),
+        "parental_axis_score": safe_float(row.get("parental_axis_score")),
         "status": "observed", "is_absent": False,
     }
 
@@ -2101,7 +2346,16 @@ def build_physical_allele_rows(
                 f"allele_{idx}_pattern": cell["pattern"], f"allele_{idx}_pattern_short": cell["pattern_short"],
                 f"allele_{idx}_n_CpGs": cell["n_CpGs"], f"allele_{idx}_n_molecules": cell.get("n_molecules", ""),
                 f"allele_{idx}_mean_coverage": fmt(cell["mean_coverage"]),
-                f"allele_{idx}_coverage_status": cell["coverage_status"], f"allele_{idx}_is_absent": str(cell["is_absent"]),
+                f"allele_{idx}_coverage_status": cell["coverage_status"],
+                f"allele_{idx}_nearest_parental_reference": cell.get("nearest_parental_reference", ""),
+                f"allele_{idx}_maternal_reference_beta": fmt(cell.get("maternal_reference_beta")),
+                f"allele_{idx}_paternal_reference_beta": fmt(cell.get("paternal_reference_beta")),
+                f"allele_{idx}_decision_boundary_beta": fmt(cell.get("decision_boundary_beta")),
+                f"allele_{idx}_distance_to_maternal_reference": fmt(cell.get("distance_to_maternal_reference")),
+                f"allele_{idx}_distance_to_paternal_reference": fmt(cell.get("distance_to_paternal_reference")),
+                f"allele_{idx}_reference_margin": fmt(cell.get("reference_margin")),
+                f"allele_{idx}_parental_axis_score": fmt(cell.get("parental_axis_score")),
+                f"allele_{idx}_is_absent": str(cell["is_absent"]),
             })
         rows.append(out)
     return rows
@@ -2140,38 +2394,32 @@ def classify_discrete_state(codes: tuple[str, str]) -> str:
 
 def closest_methylation_template(
     observed_betas: list[float],
+    reference: ParentalReferenceModel,
 ) -> tuple[str, float]:
-    """
-    Continuous template-distance classifier.
+    """Continuous template-distance classifier calibrated to controls.
 
-    One observed allele:
-      maternal-retained template = [1]
-      paternal-retained template = [0]
-
-    Two observed alleles (sorted):
-      biparental template = [0, 1]
-      maternal-duplicated template = [1, 1]
-      paternal-duplicated template = [0, 0]
-
-    The returned distance is RMS methylation distance to the winning template.
-    This makes the classification data-derived rather than a copy of the known
-    diagnosis.
+    Templates are no longer fixed at idealized 0 and 1. Instead they use the
+    empirical paternal-like and maternal-like control centroids estimated in the
+    same run. This makes template classification consistent with the primary
+    parental-state model while remaining independent of the disease label.
     """
     values = np.asarray([x for x in observed_betas if np.isfinite(x)], dtype=float)
+    m = reference.maternal_reference
+    p = reference.paternal_reference
 
     if len(values) == 1:
         beta = float(values[0])
         distances = {
-            "maternal-retained deletion": abs(beta - 1.0),
-            "paternal-retained deletion": abs(beta - 0.0),
+            "maternal-retained deletion": abs(beta - m),
+            "paternal-retained deletion": abs(beta - p),
         }
     elif len(values) == 2:
         low, high = np.sort(values)
         obs = np.array([low, high], dtype=float)
         templates = {
-            "canonical biparental chr15": np.array([0.0, 1.0]),
-            "duplicated maternal state": np.array([1.0, 1.0]),
-            "duplicated paternal state": np.array([0.0, 0.0]),
+            "canonical biparental chr15": np.array([p, m]),
+            "duplicated maternal state": np.array([m, m]),
+            "duplicated paternal state": np.array([p, p]),
         }
         distances = {
             name: float(np.sqrt(np.mean((obs - tpl) ** 2)))
@@ -2194,7 +2442,10 @@ def expected_template_for_group(mechanism: str) -> str:
     }[mechanism]
 
 
-def build_mechanistic_state_rows(panel_a_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def build_mechanistic_state_rows(
+    panel_a_rows: list[dict[str, Any]],
+    reference: ParentalReferenceModel,
+) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
 
     for row in panel_a_rows:
@@ -2235,7 +2486,19 @@ def build_mechanistic_state_rows(panel_a_rows: list[dict[str, Any]]) -> list[dic
             else np.nan
         )
 
-        predicted_template, template_distance = closest_methylation_template(values)
+        # Use the same per-sample reference that generated the discrete state.
+        # For unaffected controls this is leave-one-control-out when available;
+        # all other samples use the global unaffected-control reference.
+        sample_reference = reference
+        sample_m = safe_float(row.get("allele_1_maternal_reference_beta"))
+        sample_p = safe_float(row.get("allele_1_paternal_reference_beta"))
+        sample_b = safe_float(row.get("allele_1_decision_boundary_beta"))
+        if sample_m is not None and sample_p is not None and sample_b is not None:
+            sample_reference = ParentalReferenceModel(
+                sample_m, sample_p, sample_b, tuple(), reference.method
+            )
+
+        predicted_template, template_distance = closest_methylation_template(values, sample_reference)
         expected_template = expected_template_for_group(mechanism)
 
         rows.append(
@@ -2252,6 +2515,9 @@ def build_mechanistic_state_rows(panel_a_rows: list[dict[str, Any]]) -> list[dic
                 "expected_template_class": expected_template,
                 "predicted_template_class": predicted_template,
                 "template_distance": fmt(template_distance),
+                "maternal_reference_beta": fmt(sample_reference.maternal_reference),
+                "paternal_reference_beta": fmt(sample_reference.paternal_reference),
+                "decision_boundary_beta": fmt(sample_reference.decision_boundary),
                 "template_concordant": str(predicted_template == expected_template),
                 "state_concordant": str(observed_codes == expected_codes),
                 "specificity_role": (
@@ -2511,7 +2777,7 @@ def inspect_modbam_tags(
         import pysam
     except ImportError as exc:
         raise RuntimeError(
-            "pysam is required to validate ModBAM/HP tags before Figure 1B."
+            "pysam is required to validate ModBAM/HP tags before Figure 1A."
         ) from exc
 
     chrom, start, end = parse_region(region)
@@ -2682,7 +2948,7 @@ def run_modbamtools_plot(
     if use_hap and not tags["hp_tags"]:
         raise RuntimeError(
             f"{bam_path} has MM/ML tags but no HP tags were observed in {region}. "
-            f"Figure 1B requires haplotype grouping for {mechanism}. Use a "
+            f"Figure 1A requires haplotype grouping for {mechanism}. Use a "
             "HiPhase-tagged modBAM."
         )
 
@@ -2691,7 +2957,7 @@ def run_modbamtools_plot(
     )
 
     safe_mechanism = mechanism.lower().replace("-", "_").replace(" ", "_")
-    prefix = f"Figure1B_{safe_mechanism}_{sample_label}"
+    prefix = f"Figure1A_{safe_mechanism}_{sample_label}"
 
     command = [
         executable,
@@ -2838,7 +3104,7 @@ def load_modbamtools_panels_from_provenance(
     provenance_path: Path,
     outdir: Path,
 ) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
-    """Load cached Figure 1B PNGs without rerunning ModBAMtools."""
+    """Load cached Figure 1A PNGs without rerunning ModBAMtools."""
     if not provenance_path.exists():
         raise FileNotFoundError(
             f"Cached ModBAMtools provenance table not found: {provenance_path}"
@@ -2873,7 +3139,7 @@ def load_modbamtools_panels_from_provenance(
     missing = [mechanism for mechanism in MODBAM_GROUP_ORDER if mechanism not in panels]
     if missing:
         raise RuntimeError(
-            "Cached Figure 1B provenance is incomplete; missing mechanisms: "
+            "Cached Figure 1A provenance is incomplete; missing mechanisms: "
             + ", ".join(missing)
         )
 
@@ -2940,9 +3206,14 @@ def build_support_rows(
             retained_bed_depth = safe_float(combined.get("mean_coverage")) if combined else None
             supporting_depth = retained_bed_depth
             supporting_cpgs = cpg1
-            low_support = (
+            insufficient_support = (
                 combined is None
-                or combined.get("support_category") not in {"nominal", "limited_depth"}
+                or combined.get("support_category")
+                not in {"higher_coverage", "state_estimable"}
+            )
+            below_higher_coverage_reference = (
+                combined is not None
+                and combined.get("support_category") == "state_estimable"
             )
         else:
             if hp1_depth is not None and hp2_depth is not None and (hp1_depth + hp2_depth) > 0:
@@ -2961,12 +3232,28 @@ def build_support_rows(
                 default=None,
             )
             support_mode = "diploid_haplotype_resolved"
-            low_support = (
+            insufficient_support = (
                 hap1 is None
                 or hap2 is None
-                or hap1.get("support_category") not in {"nominal", "limited_depth"}
-                or hap2.get("support_category") not in {"nominal", "limited_depth"}
+                or hap1.get("support_category")
+                not in {"higher_coverage", "state_estimable"}
+                or hap2.get("support_category")
+                not in {"higher_coverage", "state_estimable"}
             )
+            below_higher_coverage_reference = (
+                not insufficient_support
+                and (
+                    hap1.get("support_category") == "state_estimable"
+                    or hap2.get("support_category") == "state_estimable"
+                )
+            )
+
+        if insufficient_support:
+            support_tier = "insufficient"
+        elif below_higher_coverage_reference:
+            support_tier = "state_estimable"
+        else:
+            support_tier = "higher_coverage"
 
         structural_status = structural_by_sample[sample_id]["ic_deletion_status"]
         if mechanism in {"PWS-DEL", "AS-DEL"} and structural_status == "confirmed":
@@ -3004,7 +3291,12 @@ def build_support_rows(
                 "percent_imprinted_domain_in_phased_block", ""
             ),
             "support_mode": support_mode,
-            "low_support": str(low_support),
+            "support_tier": support_tier,
+            "state_support_adequate": str(not insufficient_support),
+            "below_higher_coverage_reference": str(below_higher_coverage_reference),
+            # Backward-compatible field: True now means genuinely insufficient
+            # for state assignment, not merely below the 10x descriptive tier.
+            "low_support": str(insufficient_support),
             "hap1_source": hap1.get("data_source", "") if hap1 else "",
             "hap2_source": hap2.get("data_source", "") if hap2 else "",
             "combined_source": combined.get("data_source", "") if combined else "",
@@ -3013,120 +3305,84 @@ def build_support_rows(
     return rows
 
 
+def render_parental_reference_calibration(
+    panel_rows: list[dict[str, Any]],
+    reference: ParentalReferenceModel,
+    outdir: Path,
+) -> None:
+    """Supplementary visualization of the empirical parental-state scale.
+
+    Every observed allele/haplotype is shown on the continuous beta axis. The
+    figure makes the control-derived paternal centroid, maternal centroid and
+    equal-distance boundary explicit, so reviewers can see that primary state
+    calls are not driven by an arbitrary 0.85/0.15 cutoff.
+    """
+    rows = panel_rows
+    y = np.arange(len(rows), dtype=float)
+    fig, ax = plt.subplots(figsize=(10.5, max(5.0, 0.42 * len(rows) + 1.8)))
+
+    # Continuous decision regions.
+    ax.axvspan(0.0, reference.decision_boundary, color=STATE_COLORS["P"], alpha=0.05, lw=0)
+    ax.axvspan(reference.decision_boundary, 1.0, color=STATE_COLORS["M"], alpha=0.05, lw=0)
+    ax.axvline(reference.paternal_reference, color=STATE_COLORS["P"], lw=1.8, ls="-", label=f"Paternal ref β={reference.paternal_reference:.3f}")
+    ax.axvline(reference.maternal_reference, color=STATE_COLORS["M"], lw=1.8, ls="-", label=f"Maternal ref β={reference.maternal_reference:.3f}")
+    ax.axvline(reference.decision_boundary, color="#333333", lw=1.2, ls="--", label=f"Equal-distance boundary β={reference.decision_boundary:.3f}")
+
+    for i, row in enumerate(rows):
+        mechanism = row["molecular_mechanism"]
+        color = MECHANISM_COLORS[mechanism]
+        for idx, offset, marker_symbol in ((1, -0.10, "o"), (2, 0.10, "s")):
+            if row.get(f"allele_{idx}_status") != "observed":
+                continue
+            beta = safe_float(row.get(f"allele_{idx}_mean_methylation"))
+            lo = safe_float(row.get(f"allele_{idx}_ci_low"))
+            hi = safe_float(row.get(f"allele_{idx}_ci_high"))
+            if beta is None:
+                continue
+            if lo is not None and hi is not None:
+                ax.hlines(i + offset, lo, hi, color=color, lw=1.0, alpha=0.8, zorder=2)
+            ax.plot(beta, i + offset, marker=marker_symbol, ms=5.5, linestyle="none",
+                    markerfacecolor=color, markeredgecolor="white", markeredgewidth=0.6, zorder=3)
+
+    ax.set_yticks(y)
+    ax.set_yticklabels([r["display_label"] for r in rows], fontsize=8)
+    for tick, row in zip(ax.get_yticklabels(), rows):
+        tick.set_color(MECHANISM_COLORS[row["molecular_mechanism"]])
+        tick.set_fontweight("bold")
+    ax.set_ylim(len(rows) - 0.5, -0.5)
+    ax.set_xlim(0, 1)
+    ax.set_xlabel("Mean IC methylation (β)", fontsize=9)
+    ax.set_title(
+        "Supplementary Figure — control-calibrated parental methylation reference scale",
+        fontsize=11, loc="left", fontweight="bold"
+    )
+    ax.grid(axis="x", color="#ECECEC", lw=0.7)
+    ax.legend(frameon=False, fontsize=7, loc="upper center", bbox_to_anchor=(0.5, -0.08), ncol=3)
+    ax.text(
+        0.5, -0.16,
+        "Circles/squares denote chromosome/haplotype 1/2; horizontal segments are descriptive CpG-bootstrap 95% intervals. "
+        "Fixed 0.85/0.15 thresholds are not used for primary state assignment.",
+        transform=ax.transAxes, ha="center", va="top", fontsize=7, color="#666666"
+    )
+    fig.tight_layout(rect=[0, 0.08, 1, 1])
+    base = outdir / "supplementary" / "Supplementary_parental_reference_calibration"
+    base.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(base.with_suffix(".pdf"), bbox_inches="tight")
+    fig.savefig(base.with_suffix(".png"), dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
 # ---------------------------------------------------------------------------
 # Figure drawing
 # ---------------------------------------------------------------------------
 
-def draw_panel_a_design(ax: plt.Axes) -> None:
-    """Schematic of the four principal chromosome-15 molecular configurations."""
-    ax.axis("off")
-    ax.set_xlim(0, 1)
-    ax.set_ylim(0, 1)
 
-    ax.set_title(
-        "a. Reciprocal molecular configurations expose parental states",
-        fontsize=fs(11),
-        loc="left",
-        pad=12,
-        weight="bold",
-    )
-
-    maternal_color = STATE_COLORS["M"]
-    paternal_color = STATE_COLORS["P"]
-    deleted_color = "#EFEFEF"
-
-    configurations = [
-        (
-            "Control",
-            "maternal + paternal",
-            ("M", maternal_color, False),
-            ("P", paternal_color, False),
-        ),
-        (
-            "PWS-DEL",
-            "paternal chr15 deleted",
-            ("M", maternal_color, False),
-            ("deleted", deleted_color, True),
-        ),
-        (
-            "AS-DEL",
-            "maternal chr15 deleted",
-            ("deleted", deleted_color, True),
-            ("P", paternal_color, False),
-        ),
-        (
-            "PWS-mUPD",
-            "maternal + maternal",
-            ("M", maternal_color, False),
-            ("M", maternal_color, False),
-        ),
-    ]
-
-    y_positions = [0.79, 0.59, 0.39, 0.19]
-
-    for (mechanism, description, allele1, allele2), y in zip(
-        configurations, y_positions
-    ):
-        ax.text(
-            0.02, y, mechanism,
-            ha="left", va="center",
-            fontsize=fs(9),
-            fontweight="bold",
-            color=MECHANISM_COLORS[mechanism],
-        )
-        ax.text(
-            0.02, y - 0.075, description,
-            ha="left", va="center",
-            fontsize=fs(6.8),
-            color="#666666",
-        )
-
-        for x, allele in zip([0.52, 0.77], [allele1, allele2]):
-            label, color, deleted = allele
-            ax.add_patch(
-                Rectangle(
-                    (x, y - 0.055),
-                    0.18,
-                    0.11,
-                    facecolor=color,
-                    edgecolor="#A6A6A6" if deleted else color,
-                    hatch="///" if deleted else None,
-                    linewidth=0.9,
-                )
-            )
-            ax.text(
-                x + 0.09, y, label,
-                ha="center", va="center",
-                fontsize=fs(7),
-                color="#444444" if deleted else "white",
-                fontweight="bold",
-            )
-
-    ax.text(
-        0.61, 0.95, "chromosome /\nhaplotype 1",
-        fontsize=fs(6.2), ha="center", va="top", color="#666666",
-    )
-    ax.text(
-        0.86, 0.95, "chromosome /\nhaplotype 2",
-        fontsize=fs(6.2), ha="center", va="top", color="#666666",
-    )
-
-    ax.text(
-        0.02,
-        0.02,
-        "M = maternal-like methylated state; P = paternal-like unmethylated state.",
-        fontsize=fs(6.2),
-        ha="left",
-        va="bottom",
-        color="#666666",
-    )
-
-
-def draw_panel_b_modbamtools(
+def draw_single_molecule_panel(
     fig: plt.Figure,
     spec: Any,
     panels: dict[str, dict[str, Any]],
     region: str,
+    panel_label: str = "a",
 ) -> list[plt.Axes]:
     """Embed four ModBAMtools PNGs as raw single-molecule evidence."""
     grid = spec.subgridspec(
@@ -3142,7 +3398,7 @@ def draw_panel_b_modbamtools(
     header_ax.text(
         0.5,
         0.72,
-        "b. Raw single-molecule methylation evidence at the PWS/AS IC",
+        f"{panel_label}. Raw single-molecule methylation evidence at the PWS/AS IC",
         ha="center",
         va="center",
         fontsize=fs(11),
@@ -3176,10 +3432,10 @@ def draw_panel_b_modbamtools(
 
     axes: list[plt.Axes] = []
     titles = {
-        "Control": "b1. Control — biparental",
-        "PWS-DEL": "b2. PWS-DEL — maternal retained",
-        "AS-DEL": "b3. AS-DEL — paternal retained",
-        "PWS-mUPD": "b4. PWS-mUPD — maternal + maternal",
+        "Control": f"{panel_label}1. Control — biparental",
+        "PWS-DEL": f"{panel_label}2. PWS-DEL — maternal retained",
+        "AS-DEL": f"{panel_label}3. AS-DEL — paternal retained",
+        "PWS-mUPD": f"{panel_label}4. PWS-mUPD — maternal + maternal",
     }
 
     for index, mechanism in enumerate(MODBAM_GROUP_ORDER):
@@ -3206,18 +3462,22 @@ def draw_panel_b_modbamtools(
     return axes
 
 
-def draw_panel_c_heatmap(
+def draw_cohort_methylation_panel(
     note_ax: plt.Axes, heat_ax: plt.Axes, panel_a_rows: list[dict[str, Any]],
     inference_rows: list[dict[str, Any]] | None = None,
+    parental_reference: ParentalReferenceModel | None = None,
+    panel_label: str = "b",
 ) -> None:
     n = len(panel_a_rows); values = np.full((n, 2), np.nan); statuses = np.empty((n, 2), dtype=object)
-    low_support = np.zeros((n, 2), dtype=bool)
+    insufficient_support = np.zeros((n, 2), dtype=bool)
     for i, row in enumerate(panel_a_rows):
         for j in range(2):
             prefix = f"allele_{j+1}"; status = row.get(f"{prefix}_status", "missing"); statuses[i,j] = status
             if status == "observed":
                 values[i,j] = safe_float(row.get(f"{prefix}_mean_methylation")) or np.nan
-                low_support[i,j] = row.get(f"{prefix}_coverage_status") != "sufficient"
+                insufficient_support[i,j] = (
+                    row.get(f"{prefix}_coverage_status") == "insufficient"
+                )
     cmap = plt.get_cmap("coolwarm").copy(); cmap.set_bad("#FFFFFF")
     image = heat_ax.imshow(values, aspect="auto", cmap=cmap, norm=TwoSlopeNorm(vmin=0, vcenter=.5, vmax=1))
     heat_ax.set_xticks([0,1]); heat_ax.set_xticklabels(["Resolved chromosome /\nhaplotype 1", "Resolved chromosome /\nhaplotype 2"], fontsize=fs(8))
@@ -3238,8 +3498,8 @@ def draw_panel_c_heatmap(
                 continue
             beta=values[i,j]; patt=row.get(f"{p}_pattern_short","?")
             lo=safe_float(row.get(f"{p}_ci_low")); hi=safe_float(row.get(f"{p}_ci_high"))
-            if low_support[i,j]:
-                heat_ax.add_patch(Rectangle((j-.5,i-.5),1,1,facecolor="none",edgecolor="#7F6A2F",linewidth=1.4,zorder=3))
+            if insufficient_support[i,j]:
+                heat_ax.add_patch(Rectangle((j-.5,i-.5),1,1,facecolor="none",edgecolor="#B00020",linewidth=1.4,zorder=3))
             tc="white" if beta>=.72 or beta<=.20 else "#111"
             ci_text = f"\n[{lo:.2f},{hi:.2f}]" if lo is not None and hi is not None else ""
             heat_ax.text(j,i,f"{beta:.2f} {patt}{ci_text}",ha="center",va="center",fontsize=fs(5.8),color=tc,zorder=4)
@@ -3250,9 +3510,20 @@ def draw_panel_c_heatmap(
         idx=[i for i,r in enumerate(panel_a_rows) if r["molecular_mechanism"]==mech]
         if idx:
             note_ax.text(.02,.5*(idx[0]+idx[-1]),f"{mech}\n(n={len(idx)})",ha="left",va="center",fontsize=fs(8),fontweight="bold",color=MECHANISM_COLORS[mech])
-    heat_ax.set_title("c. IC methylation state across the complete cohort",fontsize=fs(11),loc="left",x=-.73,pad=12,weight="bold")
+    heat_ax.set_title(
+        f"{panel_label}. IC methylation state across the complete cohort",
+        fontsize=fs(11), loc="left", x=-.73, pad=12, weight="bold"
+    )
     cbar=plt.colorbar(image,ax=heat_ax,fraction=.048,pad=.025); cbar.set_label("Mean IC methylation (β)",fontsize=fs(8)); cbar.ax.tick_params(labelsize=fs(7))
-    heat_ax.text(.5,-.10,f"M-like: β ≥ {MATERNAL_THRESHOLD:.2f} | P-like: β ≤ {PATERNAL_THRESHOLD:.2f}; brackets = descriptive CpG-bootstrap 95% interval",
+    if parental_reference is not None:
+        state_note = (
+            f"Primary state = control-calibrated: P-ref={parental_reference.paternal_reference:.3f}, "
+            f"M-ref={parental_reference.maternal_reference:.3f}, boundary={parental_reference.decision_boundary:.3f}; "
+            "brackets = descriptive CpG-bootstrap 95% interval"
+        )
+    else:
+        state_note = "Primary state = control-calibrated parental reference; brackets = descriptive CpG-bootstrap 95% interval"
+    heat_ax.text(.5,-.10,state_note,
                     transform=heat_ax.transAxes,ha="center",va="top",fontsize=fs(5.6),color="#666")
     if inference_rows:
         r=inference_rows[0]
@@ -3493,11 +3764,18 @@ def _support_y_axis(ax: plt.Axes, support_rows: list[dict[str, Any]], show_y: bo
             ax.axhline(i + 0.5, color="#5C5C5C", lw=0.7)
 
 
-def draw_total_depth_axis(ax: plt.Axes, support_rows: list[dict[str, Any]]) -> None:
+def draw_total_depth_axis(
+    ax: plt.Axes,
+    support_rows: list[dict[str, Any]],
+    panel_label: str = "c1",
+) -> None:
     values = [safe_float(r.get("bam_total_ic_depth")) or 0 for r in support_rows]
     xmax = max(values, default=1) * 1.22
     ax.set_xlim(0, max(xmax, 1))
-    ax.set_title("Total IC depth", fontsize=fs(8), pad=6, fontweight="bold")
+    ax.set_title(
+        f"{panel_label}. Total IC depth",
+        fontsize=fs(8), pad=6, fontweight="bold", loc="left"
+    )
     ax.grid(axis="x", color="#ECECEC", lw=0.7)
     ax.tick_params(axis="x", labelsize=fs(6.8))
     _support_y_axis(ax, support_rows, True)
@@ -3513,7 +3791,11 @@ def draw_total_depth_axis(ax: plt.Axes, support_rows: list[dict[str, Any]]) -> N
                     textcoords="offset points", va="center", fontsize=fs(5.6))
 
 
-def draw_hp_depth_axis(ax: plt.Axes, support_rows: list[dict[str, Any]]) -> None:
+def draw_hp_depth_axis(
+    ax: plt.Axes,
+    support_rows: list[dict[str, Any]],
+    panel_label: str = "c2",
+) -> None:
     vals = [
         safe_float(r.get(k)) or 0
         for r in support_rows
@@ -3521,7 +3803,10 @@ def draw_hp_depth_axis(ax: plt.Axes, support_rows: list[dict[str, Any]]) -> None
     ]
     xmax = max(vals, default=1) * 1.25
     ax.set_xlim(0, max(xmax, 1))
-    ax.set_title("HP1 / HP2 IC depth", fontsize=fs(8), pad=6, fontweight="bold")
+    ax.set_title(
+        f"{panel_label}. HP1 / HP2 IC depth",
+        fontsize=fs(8), pad=6, fontweight="bold", loc="left"
+    )
     ax.grid(axis="x", color="#ECECEC", lw=0.7)
     ax.tick_params(axis="x", labelsize=fs(6.8))
     _support_y_axis(ax, support_rows, False)
@@ -3555,7 +3840,11 @@ def draw_hp_depth_axis(ax: plt.Axes, support_rows: list[dict[str, Any]]) -> None
     )
 
 
-def draw_cpg_support_axis(ax: plt.Axes, support_rows: list[dict[str, Any]]) -> None:
+def draw_cpg_support_axis(
+    ax: plt.Axes,
+    support_rows: list[dict[str, Any]],
+    panel_label: str = "c3",
+) -> None:
     vals = []
     for r in support_rows:
         if r["molecular_mechanism"] in {"PWS-DEL", "AS-DEL"}:
@@ -3564,7 +3853,10 @@ def draw_cpg_support_axis(ax: plt.Axes, support_rows: list[dict[str, Any]]) -> N
             vals.extend([safe_float(r.get("hap1_cpgs")) or 0, safe_float(r.get("hap2_cpgs")) or 0])
     xmax = max(vals, default=1) * 1.20
     ax.set_xlim(0, max(xmax, 1))
-    ax.set_title("CpGs by allele / HP", fontsize=fs(8), pad=6, fontweight="bold")
+    ax.set_title(
+        f"{panel_label}. CpGs by allele / HP",
+        fontsize=fs(8), pad=6, fontweight="bold", loc="left"
+    )
     ax.grid(axis="x", color="#ECECEC", lw=0.7)
     ax.tick_params(axis="x", labelsize=fs(6.8))
     _support_y_axis(ax, support_rows, False)
@@ -3589,10 +3881,17 @@ def draw_cpg_support_axis(ax: plt.Axes, support_rows: list[dict[str, Any]]) -> N
                         markerfacecolor="white", markeredgecolor="#D55E00")
 
 
-def draw_hp_balance_axis(ax: plt.Axes, support_rows: list[dict[str, Any]]) -> None:
+def draw_hp_balance_axis(
+    ax: plt.Axes,
+    support_rows: list[dict[str, Any]],
+    panel_label: str = "c4",
+) -> None:
     ax.set_xlim(0, 0.52)
     ax.set_xticks([0, 0.25, 0.5])
-    ax.set_title("HP balance", fontsize=fs(8), pad=6, fontweight="bold")
+    ax.set_title(
+        f"{panel_label}. HP balance",
+        fontsize=fs(8), pad=6, fontweight="bold", loc="left"
+    )
     ax.grid(axis="x", color="#ECECEC", lw=0.7)
     ax.tick_params(axis="x", labelsize=fs(6.8))
     ax.axvline(0.5, color="#777777", lw=0.8, ls="--")
@@ -3621,28 +3920,60 @@ def draw_hp_balance_axis(ax: plt.Axes, support_rows: list[dict[str, Any]]) -> No
     )
 
 
-def draw_panel_d(metric_axes: list[plt.Axes], support_rows: list[dict[str, Any]]) -> None:
-    draw_total_depth_axis(metric_axes[0], support_rows)
-    draw_hp_depth_axis(metric_axes[1], support_rows)
-    draw_cpg_support_axis(metric_axes[2], support_rows)
-    draw_hp_balance_axis(metric_axes[3], support_rows)
+def draw_sequencing_support_panel(
+    metric_axes: list[plt.Axes],
+    support_rows: list[dict[str, Any]],
+    panel_labels: tuple[str, str, str, str] = ("c1", "c2", "c3", "c4"),
+) -> None:
+    draw_total_depth_axis(metric_axes[0], support_rows, panel_labels[0])
+    draw_hp_depth_axis(metric_axes[1], support_rows, panel_labels[1])
+    draw_cpg_support_axis(metric_axes[2], support_rows, panel_labels[2])
+    draw_hp_balance_axis(metric_axes[3], support_rows, panel_labels[3])
 
 
-def create_figure(
+def _save_figure_formats(
+    fig: plt.Figure,
+    out_prefix: Path,
+    aliases: tuple[str, ...] = (),
+) -> None:
+    """Save publication figures once, then copy byte-identical aliases."""
+    out_prefix.parent.mkdir(parents=True, exist_ok=True)
+    canonical_paths: list[Path] = []
+    for suffix in (".png", ".pdf", ".svg"):
+        output_path = out_prefix.with_suffix(suffix)
+        kwargs: dict[str, Any] = {"bbox_inches": "tight"}
+        if suffix == ".png":
+            kwargs["dpi"] = 300
+        fig.savefig(output_path, **kwargs)
+        canonical_paths.append(output_path)
+
+    # Re-rendering the same large figure for every historical filename is slow
+    # and can leave a partially written raster if a job is interrupted.  The
+    # aliases are therefore exact copies of the fully written canonical files.
+    for alias in aliases:
+        alias_prefix = out_prefix.with_name(alias)
+        for source_path in canonical_paths:
+            shutil.copy2(source_path, alias_prefix.with_suffix(source_path.suffix))
+
+
+def create_main_figure(
     out_prefix: Path,
     panel_a_rows: list[dict[str, Any]],
-    support_rows: list[dict[str, Any]],
     modbam_panels: dict[str, dict[str, Any]],
     modbam_region: str,
+    support_rows: list[dict[str, Any]],
     inference_rows: list[dict[str, Any]] | None = None,
+    parental_reference: ParentalReferenceModel | None = None,
 ) -> None:
     """
     Main publication Figure 1.
 
-    A = biological design
-    B = raw ModBAMtools single-molecule evidence
-    C = quantitative complete-cohort IC methylation
-    D = technical support
+    A = enlarged raw ModBAMtools single-molecule evidence
+    B = quantitative complete-cohort IC methylation
+    C = sequencing depth and haplotype support
+
+    The conceptual molecular-design panel is omitted because the reciprocal
+    configurations are already explicit in the raw and cohort-level data.
     """
     plt.rcParams.update(
         {
@@ -3655,123 +3986,97 @@ def create_figure(
         }
     )
 
-    fig = plt.figure(figsize=(18.5, 13.0), constrained_layout=False)
+    fig = plt.figure(figsize=(19.5, 14.2), constrained_layout=False)
     outer = GridSpec(
         2,
         1,
         figure=fig,
-        height_ratios=[1.10, 0.90],
-        hspace=0.36,
+        height_ratios=[1.35, 0.95],
+        hspace=0.27,
     )
 
-    # Top row: conceptual design + raw molecules.
-    top = outer[0].subgridspec(
-        1,
-        2,
-        width_ratios=[0.72, 1.78],
-        wspace=0.16,
-    )
-    ax_a = fig.add_subplot(top[0, 0])
-    draw_panel_a_design(ax_a)
-
-    draw_panel_b_modbamtools(
+    # The raw single-molecule evidence is the dominant, full-width panel.
+    draw_single_molecule_panel(
         fig=fig,
-        spec=top[0, 1],
+        spec=outer[0],
         panels=modbam_panels,
         region=modbam_region,
+        panel_label="a",
     )
 
-    # Bottom row: cohort quantification + technical support.
+    # Bottom row: cohort result followed by continuous technical support.
     bottom = outer[1].subgridspec(
         1,
         2,
-        width_ratios=[1.05, 1.45],
-        wspace=0.24,
+        width_ratios=[0.40, 0.60],
+        wspace=0.18,
     )
 
     panel_c_grid = bottom[0, 0].subgridspec(
         1,
         2,
-        width_ratios=[0.50, 1.0],
-        wspace=0.05,
+        width_ratios=[0.43, 1.0],
+        wspace=0.04,
     )
     ax_c_note = fig.add_subplot(panel_c_grid[0, 0])
     ax_c_heat = fig.add_subplot(panel_c_grid[0, 1])
-    draw_panel_c_heatmap(ax_c_note, ax_c_heat, panel_a_rows, inference_rows)
-
-    panel_d_grid = bottom[0, 1].subgridspec(1, 4, wspace=0.24)
-    ax_d = [fig.add_subplot(panel_d_grid[0, i]) for i in range(4)]
-    draw_panel_d(ax_d, support_rows)
-
-    fig.subplots_adjust(
-        top=0.945,
-        bottom=0.105,
-        left=0.045,
-        right=0.96,
+    draw_cohort_methylation_panel(
+        ax_c_note,
+        ax_c_heat,
+        panel_a_rows,
+        inference_rows,
+        parental_reference,
+        panel_label="b",
     )
 
-    # Position panel-D title after layout is resolved.
-    fig.canvas.draw()
-    panel_d_left = ax_d[0].get_position().x0
-    panel_d_right = ax_d[-1].get_position().x1
-    panel_d_top = ax_d[0].get_position().y1
-
-    fig.text(
-        (panel_d_left + panel_d_right) / 2,
-        panel_d_top + 0.027,
-        "d. Sequencing depth and haplotype support at the IC",
-        ha="center",
-        va="bottom",
+    support_grid = bottom[0, 1].subgridspec(
+        2,
+        4,
+        height_ratios=[0.08, 1.0],
+        width_ratios=[1.0, 1.15, 1.05, 1.0],
+        hspace=0.05,
+        wspace=0.28,
+    )
+    support_header = fig.add_subplot(support_grid[0, :])
+    support_header.axis("off")
+    support_header.text(
+        0.0,
+        0.72,
+        "c. Sequencing depth and haplotype support at the PWS/AS IC",
+        ha="left",
+        va="center",
         fontsize=fs(11),
         fontweight="bold",
     )
-
-    support_handles = [
-        Line2D(
-            [0], [0],
-            marker="o",
-            linestyle="none",
-            markerfacecolor="#444444",
-            markeredgecolor="#444444",
-            markersize=6,
-        ),
-        Line2D(
-            [0], [0],
-            marker="o",
-            linestyle="none",
-            markerfacecolor="white",
-            markeredgecolor="#444444",
-            markersize=6,
-        ),
-    ]
-    fig.legend(
-        support_handles,
-        ["passes nominal IC support", "below nominal IC support"],
-        frameon=False,
-        fontsize=fs(6.7),
-        ncol=2,
-        loc="lower center",
-        bbox_to_anchor=((panel_d_left + panel_d_right) / 2, 0.050),
-        bbox_transform=fig.transFigure,
+    support_axes = [fig.add_subplot(support_grid[1, i]) for i in range(4)]
+    draw_sequencing_support_panel(
+        support_axes,
+        support_rows,
+        panel_labels=("c1", "c2", "c3", "c4"),
     )
 
-    out_prefix.parent.mkdir(parents=True, exist_ok=True)
-    for suffix in (".png", ".pdf", ".svg"):
-        kwargs: dict[str, Any] = {"bbox_inches": "tight"}
-        if suffix == ".png":
-            kwargs["dpi"] = 300
-        fig.savefig(out_prefix.with_suffix(suffix), **kwargs)
+    fig.text(
+        0.70,
+        0.030,
+        (
+            "Support is shown continuously; lower per-haplotype depth is not "
+            "a sample failure when the parental-state estimate remains estimable."
+        ),
+        ha="center",
+        va="bottom",
+        fontsize=fs(5.8),
+        color="#666666",
+    )
 
-    # Backward-compatible aliases expected by the repository workflow.
-    for alias in ("Figure1", "Figure1_improved"):
-        for suffix in (".png", ".pdf", ".svg"):
-            kwargs = {"bbox_inches": "tight"}
-            if suffix == ".png":
-                kwargs["dpi"] = 300
-            fig.savefig(out_prefix.with_name(alias).with_suffix(suffix), **kwargs)
+    fig.subplots_adjust(
+        top=0.965,
+        bottom=0.075,
+        left=0.040,
+        right=0.985,
+    )
 
+    _save_figure_formats(fig, out_prefix, aliases=("Figure1", "Figure1_improved"))
     plt.close(fig)
-
 
 # ---------------------------------------------------------------------------
 # Extensive report
@@ -3917,7 +4222,7 @@ def _report_main_findings(
         concordances = [x for x in concordances if x is not None]
         if concordances:
             lines.append(
-                "- **Threshold robustness:** cohort state concordance across "
+                "- **Supplementary extreme-threshold sensitivity:** cohort concordance across "
                 f"the prespecified threshold grid ranged from "
                 f"{min(concordances):.1f}% to {max(concordances):.1f}%."
             )
@@ -3937,18 +4242,18 @@ def _report_main_findings(
               "than as a binary missingness criterion."
         )
 
-    fallback_cells = 0
+    direct_modbam_cells = 0
     for row in panel_rows:
         for idx in (1, 2):
             source = str(row.get(f"allele_{idx}_source", ""))
-            if "modBAM MM/ML fallback" in source:
-                fallback_cells += 1
-    if fallback_cells:
+            if "ModBAM MM/ML" in source:
+                direct_modbam_cells += 1
+    if direct_modbam_cells:
         lines.append(
-            f"- **Depth-aware rescue:** {fallback_cells} allele/haplotype "
-            "estimate(s) shown in the cohort matrix were recovered directly "
+            f"- **Direct ModBAM quantification:** {direct_modbam_cells} allele/haplotype "
+            "estimate(s) shown in the cohort matrix were quantified directly "
             "from MM/ML+HP ModBAM evidence because the corresponding "
-            "pb-CpG-tools haplotype BED was not estimable."
+            "pb-CpG-tools haplotype BED did not provide an estimate."
         )
 
     return lines
@@ -3966,6 +4271,8 @@ def write_report(
     structural_rows: list[dict[str, Any]] | None = None,
     cn_classification_rows: list[dict[str, Any]] | None = None,
     preflight_rows: list[dict[str, Any]] | None = None,
+    parental_reference: ParentalReferenceModel | None = None,
+    parental_reference_rows: list[dict[str, Any]] | None = None,
     outdir: Path | None = None,
 ) -> None:
     """Write an extensive, figure-linked scientific results report.
@@ -3994,6 +4301,7 @@ def write_report(
     preflight_rows = preflight_rows or []
     inference_rows = inference_rows or []
     threshold_rows = threshold_rows or []
+    parental_reference_rows = parental_reference_rows or []
 
     lines: list[str] = [
         "# Extensive Figure 1 results report",
@@ -4024,6 +4332,15 @@ def write_report(
         inference_rows,
         threshold_rows,
     )
+    if parental_reference is not None:
+        lines.append(
+            "- **Control-calibrated parental-state model:** "
+            f"paternal-like reference β={parental_reference.paternal_reference:.3f}, "
+            f"maternal-like reference β={parental_reference.maternal_reference:.3f}, "
+            f"equal-distance boundary β={parental_reference.decision_boundary:.3f}. "
+            "Primary M/P calls use these empirical references and descriptive "
+            "uncertainty, not fixed 0.85/0.15 thresholds."
+        )
 
     # Main Figure.
     lines += [
@@ -4036,9 +4353,10 @@ def write_report(
         outdir / "figures" / "Figure1_mechanistic.png",
         "Main Figure 1",
         (
-            "Main Figure 1 integrates the reciprocal molecular design, "
-            "single-molecule ModBAM evidence, complete-cohort IC methylation, "
-            "and sequencing-depth/haplotype support."
+            "Main Figure 1 integrates enlarged single-molecule ModBAM evidence, "
+            "complete-cohort IC methylation and continuous sequencing/phasing "
+            "support. Lower per-haplotype depth is not treated as sample failure "
+            "when the methylation state remains estimable."
         ),
     )
 
@@ -4192,13 +4510,65 @@ def write_report(
         "## 4. IC methylation architecture across the cohort",
         "",
         "The IC is used as an anchoring locus for maternal-like versus paternal-"
-        "like methylation identity. This is not presented as an independent "
-        "blinded diagnostic assay. Confirmed deletions, missing evidence and "
-        "low-depth observations are kept as separate categories.",
+        "like methylation identity. Primary parental-state calls are calibrated "
+        "to unaffected controls rather than fixed beta cutoffs: within each "
+        "control the higher-methylated haplotype anchors the maternal-like state "
+        "and the lower-methylated haplotype anchors the paternal-like state. The "
+        "median high and low values define the cohort centroids, and their midpoint "
+        "defines the equal-distance decision boundary. An allele is called M-like "
+        "or P-like only when its descriptive CpG-bootstrap interval lies wholly "
+        "on the corresponding side of that boundary; otherwise it is labelled "
+        "uncertain. Controls are evaluated with a leave-one-control-out reference "
+        "when possible. This is not presented as an independent blinded diagnostic "
+        "assay. Confirmed deletions, missing evidence and low-depth observations "
+        "remain separate categories.",
+        "",
+        "### Empirical parental-reference model",
+        "",
+        "",
+    ]
+    if parental_reference_rows:
+        lines += _md_table(
+            [
+                "Scope", "Excluded control", "Controls used",
+                "Paternal ref β", "Maternal ref β", "Decision boundary β",
+                "Reference separation"
+            ],
+            [
+                [
+                    r.get("scope", ""),
+                    r.get("excluded_control", ""),
+                    r.get("controls_used", ""),
+                    r.get("paternal_reference_beta", ""),
+                    r.get("maternal_reference_beta", ""),
+                    r.get("decision_boundary_beta", ""),
+                    r.get("reference_separation", ""),
+                ]
+                for r in parental_reference_rows
+            ],
+        )
+    lines += [
+        "",
+        "### Supplementary Figure: empirical parental-reference calibration",
+        "",
+    ]
+    lines += _report_image(
+        report_path,
+        outdir / "supplementary" / "Supplementary_parental_reference_calibration.png",
+        "Control-calibrated parental methylation reference scale",
+        (
+            "Observed allele/haplotype methylation values are displayed on the "
+            "same continuous beta scale as the control-derived paternal-like and "
+            "maternal-like centroids and their equal-distance boundary. This plot "
+            "makes the primary classification rule visually auditable."
+        ),
+    )
+    lines += [
         "",
         "### Per-sample methylation state",
         "",
     ]
+
     lines += _md_table(
         [
             "Sample", "Group", "Observed state",
@@ -4277,16 +4647,16 @@ def write_report(
     else:
         lines.append("_Participant-level inference was not available._")
 
-    # Depth.
+    # Supplementary sequencing-support context.
     lines += [
         "",
-        "## 6. Sequencing depth and haplotype support",
+        "## 6. Supplementary sequencing depth and haplotype support",
         "",
-        "Depth is explicitly treated as a support variable because the probability "
-        "of resolving both haplotypes is not equal in a ~10× versus ~35× genome. "
-        "Lower-depth samples are retained when their methylation state is "
-        "estimable, and their uncertainty/support category is reported rather "
-        "than converting them to biological absence.",
+        "Sequencing support is reported continuously because total IC depth, "
+        "haplotype-specific depth and haplotype balance measure different aspects "
+        "of the evidence. A state-estimable observation is retained even when it "
+        "falls below the descriptive higher-coverage reference; only genuinely "
+        "non-estimable evidence is counted as insufficient.",
         "",
         "### Group-level depth summary",
         "",
@@ -4317,7 +4687,7 @@ def write_report(
             sum(str(r.get("low_support", "")).lower() == "true" for r in group),
         ])
     lines += _md_table(
-        ["Group", "n", "Median total IC depth (range)", "Median HP balance (range)", "Limited-support n"],
+        ["Group", "n", "Median total IC depth (range)", "Median HP balance (range)", "Non-estimable n"],
         depth_table,
     )
 
@@ -4330,7 +4700,7 @@ def write_report(
         [
             "Sample", "Group", "Total depth", "HP1 depth", "HP2 depth",
             "HP balance", "HP1 CpGs", "HP2 CpGs", "Combined CpGs",
-            "Support"
+            "Support tier"
         ],
         [
             [
@@ -4343,7 +4713,7 @@ def write_report(
                 r.get("hap1_cpgs", ""),
                 r.get("hap2_cpgs", ""),
                 r.get("combined_cpgs", ""),
-                "limited" if str(r.get("low_support", "")).lower() == "true" else "nominal",
+                r.get("support_tier", ""),
             ]
             for r in support_rows
         ],
@@ -4352,10 +4722,12 @@ def write_report(
     # Threshold sensitivity.
     lines += [
         "",
-        "## 7. Methylation-threshold sensitivity",
+        "## 7. Supplementary extreme-threshold sensitivity",
         "",
-        "The prespecified threshold grid tests whether cohort interpretation "
-        "depends materially on one arbitrary M/P cutoff.",
+        "Fixed beta thresholds are not used for the primary parental-state calls. "
+        "This prespecified 0.80/0.20, 0.85/0.15 and 0.90/0.10 grid is retained "
+        "only as a secondary sensitivity analysis to show how an extreme-state "
+        "classifier behaves relative to the control-calibrated continuous model.",
         "",
     ]
     lines += _md_table(
@@ -4391,7 +4763,7 @@ def write_report(
         lines.append("")
 
     lines += _md_table(
-        ["Sample", "Group", "Status", "Deletion status", "Deletion type", "Haplotype support", "Issues"],
+        ["Sample", "Group", "Status", "Deletion status", "Deletion type", "Haplotype support", "Support notes", "Issues"],
         [
             [
                 r.get("sample_id", ""),
@@ -4400,6 +4772,7 @@ def write_report(
                 r.get("ic_deletion_status", ""),
                 r.get("deletion_type", ""),
                 r.get("haplotype_support", ""),
+                r.get("support_notes", ""),
                 r.get("issues", ""),
             ]
             for r in preflight_rows
@@ -4510,8 +4883,9 @@ def write_report(
         "The ability to resolve both haplotypes depends on total IC depth and HP "
         "balance. Disease-control or other lower-depth samples can therefore have "
         "valid phase blocks but sparser haplotype-specific methylation evidence. "
-        "The depth-aware logic retains estimable states, flags limited support, "
-        "and can rescue sparse haplotype BEDs using MM/ML+HP ModBAM evidence.",
+        "The depth-aware logic retains state-estimable observations, reports their "
+        "support continuously and can quantify sparse haplotype BEDs directly from "
+        "MM/ML+HP ModBAM evidence.",
         "",
         "### Finding 4 — orthogonal disease controls test locus specificity",
         "",
@@ -4543,14 +4917,19 @@ def write_report(
         "Unless parental genotypes or an independent assay are available, the same "
         "IC should not be described as an independent validation of the labels it "
         "helps define.",
+        "- **Reference calibration:** the empirical maternal-like and paternal-like "
+        "centroids are internally calibrated from only two unaffected controls. "
+        "They are appropriate anchors for this cohort but should not be presented "
+        "as population-wide diagnostic cutoffs. Leave-one-control-out evaluation "
+        "reduces, but does not eliminate, the limitations of the small reference set.",
         "- **CN breakpoint precision:** HiFiCNV defines dosage transitions, not "
         "necessarily nucleotide-resolution breakpoints inside segmental "
         "duplications.",
         "- **CpG-bootstrap intervals:** the displayed CpG bootstrap describes "
         "measurement uncertainty within an allele/haplotype; it does not increase "
         "the biological sample size.",
-        "- **ModBAM fallback:** rescued methylation estimates are explicitly tagged "
-        "as ModBAM-derived and should be sensitivity-checked against BED-derived "
+        "- **Direct ModBAM estimates:** ModBAM-derived methylation estimates are "
+        "explicitly tagged and should be sensitivity-checked against BED-derived "
         "estimates where both are available.",
     ]
 
@@ -4578,12 +4957,17 @@ def write_report(
         "## 13. Reproducibility and source-data index",
         "",
         "- `../tables/Figure1_structural_IC_evidence.tsv` — integrated HiFiCNV/pbsv structural evidence.",
-        "- `../tables/Figure1C_allele_methylation_matrix.tsv` — plotted cohort methylation values and states.",
-        "- `../tables/Figure1C_sample_level_inference.tsv` — participant-level PWS-DEL versus AS-DEL inference.",
-        "- `../tables/Figure1D_coverage_phasing_support.tsv` — depth, HP depth, CpG support and HP balance.",
+        "- `../tables/Figure1_parental_reference_model.tsv` — control-derived parental centroids, decision boundary and leave-one-control-out references.",
+        "- `../tables/Figure1A_modbamtools_representatives.tsv` — representative raw single-molecule panels.",
+        "- `../tables/Figure1B_allele_methylation_matrix.tsv` — plotted cohort methylation values and states.",
+        "- `../tables/Figure1B_sample_level_inference.tsv` — participant-level PWS-DEL versus AS-DEL inference.",
+        "- `../tables/Figure1C_coverage_phasing_support.tsv` — depth, HP depth, CpG support and HP balance.",
         "- `../supplementary/Supplementary_chr15_deletion_classification.tsv` — deletion class calls from CN transitions.",
+        "- `../supplementary/Supplementary_parental_reference_calibration.png` — continuous control-calibrated parental reference visualization.",
         "- `../supplementary/Figure1_threshold_sensitivity.tsv` — sensitivity to M/P thresholds.",
-        "- `../source_data/Figure1B_single_molecule_MM_ML_source_data.tsv.gz` — raw long-format MM/ML calls used as source data.",
+        "- `../source_data/Figure1A_single_molecule_MM_ML_source_data.tsv.gz` — raw long-format MM/ML calls used as source data.",
+        "- `../source_data/Figure1B_cohort_methylation_source_data.tsv` — source data for the cohort methylation matrix.",
+        "- `../source_data/Figure1C_sequencing_support_source_data.tsv` — source data for sequencing/phasing support.",
         "- `../source_data/Supplementary_chr15_copy_number_segments_source_data.tsv` — CN segments underlying supplementary CN plots.",
         "- `../Figure1_configuration.json` — exact thresholds and genomic intervals.",
         "- `../Figure1_software_versions.json` — software versions and Git commit.",
@@ -4608,17 +4992,46 @@ def main() -> None:
     for d in (table_dir, figure_dir, report_dir, source_dir, supp_dir): d.mkdir(parents=True, exist_ok=True)
 
     if RENDER_ONLY:
-        panel_path = table_dir / "Figure1C_allele_methylation_matrix.tsv"
-        if not panel_path.exists(): panel_path = table_dir / "Figure1A_allele_methylation_matrix.tsv"
-        support_path = table_dir / "Figure1D_coverage_phasing_support.tsv"
-        provenance_path = table_dir / "Figure1B_modbamtools_representatives.tsv"
+        panel_path = table_dir / "Figure1B_allele_methylation_matrix.tsv"
+        if not panel_path.exists():
+            panel_path = table_dir / "Figure1C_allele_methylation_matrix.tsv"
+        if not panel_path.exists():
+            panel_path = table_dir / "Figure1A_allele_methylation_matrix.tsv"
+        support_path = table_dir / "Figure1C_coverage_phasing_support.tsv"
+        if not support_path.exists():
+            support_path = table_dir / "SupplementaryFigure1_coverage_phasing_support.tsv"
+        if not support_path.exists():
+            support_path = table_dir / "Figure1D_coverage_phasing_support.tsv"
+        provenance_path = table_dir / "Figure1A_modbamtools_representatives.tsv"
+        if not provenance_path.exists():
+            provenance_path = table_dir / "Figure1B_modbamtools_representatives.tsv"
         missing=[p for p in (panel_path,support_path,provenance_path) if not p.exists()]
         if missing: raise FileNotFoundError("Render-only mode missing:\n"+"\n".join(map(str,missing)))
         panel_rows=read_tsv(panel_path); support_rows=read_tsv(support_path)
         modbam_panels, prov = load_modbamtools_panels_from_provenance(provenance_path,outdir)
-        inference_path=table_dir/"Figure1C_sample_level_inference.tsv"
+        inference_path=table_dir/"Figure1B_sample_level_inference.tsv"
+        if not inference_path.exists():
+            inference_path=table_dir/"Figure1C_sample_level_inference.tsv"
         inference=read_tsv(inference_path) if inference_path.exists() else []
-        create_figure(figure_dir/"Figure1_mechanistic",panel_rows,support_rows,modbam_panels,MODBAM_PLOT_REGION,inference)
+        reference_path=table_dir/"Figure1_parental_reference_model.tsv"
+        render_reference=None
+        if reference_path.exists():
+            ref_rows=read_tsv(reference_path)
+            global_rows=[r for r in ref_rows if r.get("scope")=="global"]
+            if global_rows:
+                rr=global_rows[0]
+                m=safe_float(rr.get("maternal_reference_beta")); p=safe_float(rr.get("paternal_reference_beta")); b=safe_float(rr.get("decision_boundary_beta"))
+                if m is not None and p is not None and b is not None:
+                    render_reference=ParentalReferenceModel(m,p,b,tuple((rr.get("controls_used") or "").split(";")) if rr.get("controls_used") else tuple())
+        create_main_figure(
+            figure_dir / "Figure1_mechanistic",
+            panel_rows,
+            modbam_panels,
+            MODBAM_PLOT_REGION,
+            support_rows,
+            inference,
+            render_reference,
+        )
         return
 
     vcf_dir=Path(VCF_DIR); bam_dir=Path(BAM_DIR); modbam_dir=Path(MODBAM_DIR); methylation_dir=Path(METHYLATION_DIR); cnv_dir=Path(CNV_DIR); metadata_path=Path(METADATA_PATH)
@@ -4675,33 +5088,41 @@ def main() -> None:
         })
     write_tsv(table_dir/"Figure1_cohort_QC_summary.tsv",summary_rows)
 
-    assignment_rows,matrix_rows,stats_by_sample=build_assignments(sample_files,structural)
+    assignment_rows,matrix_rows,stats_by_sample,parental_reference,parental_reference_rows=build_assignments(sample_files,structural)
     write_tsv(table_dir/"Figure1_parental_like_assignment.tsv",assignment_rows)
     write_tsv(table_dir/"Figure1_IC_methylation_matrix.tsv",matrix_rows)
+    write_tsv(table_dir/"Figure1_parental_reference_model.tsv",parental_reference_rows)
     panel_rows=build_physical_allele_rows(matrix_rows,structural)
-    write_tsv(table_dir/"Figure1C_allele_methylation_matrix.tsv",panel_rows)
+    write_tsv(table_dir/"Figure1B_allele_methylation_matrix.tsv",panel_rows)
+    render_parental_reference_calibration(panel_rows,parental_reference,outdir)
 
     preflight=build_preflight_qc(sample_files,structural,stats_by_sample)
     write_tsv(table_dir/"Figure1_preflight_QC.tsv",preflight)
     enforce_preflight(preflight)
 
-    mechanistic_rows=build_mechanistic_state_rows(panel_rows); diagnostic_rows=build_diagnostic_state_rows(mechanistic_rows)
+    mechanistic_rows=build_mechanistic_state_rows(panel_rows,parental_reference); diagnostic_rows=build_diagnostic_state_rows(mechanistic_rows)
     write_tsv(supp_dir/"closest_methylation_template_per_sample.tsv",mechanistic_rows)
     write_tsv(supp_dir/"methylation_template_group_summary.tsv",diagnostic_rows)
 
     threshold_rows=build_threshold_sensitivity(panel_rows); write_tsv(supp_dir/"Figure1_threshold_sensitivity.tsv",threshold_rows)
-    inference_rows=build_sample_level_inference(panel_rows); write_tsv(table_dir/"Figure1C_sample_level_inference.tsv",inference_rows)
+    inference_rows=build_sample_level_inference(panel_rows); write_tsv(table_dir/"Figure1B_sample_level_inference.tsv",inference_rows)
 
     # Legacy mixed contrast is retained only outside the Figure1 panel namespace.
     contrast_rows=build_per_cpg_contrast(stats_by_sample,assignment_rows)
     write_tsv(supp_dir/"legacy_mixed_parental_state_contrast.tsv",contrast_rows)
 
     support_rows=build_support_rows(summary_rows,matrix_rows,sample_files,structural)
-    write_tsv(table_dir/"Figure1D_coverage_phasing_support.tsv",support_rows)
+    write_tsv(table_dir/"Figure1C_coverage_phasing_support.tsv",support_rows)
 
-    provenance_path=table_dir/"Figure1B_modbamtools_representatives.tsv"
+    provenance_path=table_dir/"Figure1A_modbamtools_representatives.tsv"
     if SKIP_MODBAMTOOLS:
-        modbam_panels,modbam_provenance=load_modbamtools_panels_from_provenance(provenance_path,outdir)
+        cached_provenance_path = provenance_path
+        legacy_provenance_path = table_dir/"Figure1B_modbamtools_representatives.tsv"
+        if not cached_provenance_path.exists() and legacy_provenance_path.exists():
+            cached_provenance_path = legacy_provenance_path
+        modbam_panels,modbam_provenance=load_modbamtools_panels_from_provenance(cached_provenance_path,outdir)
+        if cached_provenance_path != provenance_path:
+            write_tsv(provenance_path,modbam_provenance)
     else:
         representatives=choose_representative_modbam_samples(support_rows,sample_files)
         modbam_panels,modbam_provenance=build_modbamtools_panels(representatives,outdir,MODBAMTOOLS_BIN,MODBAM_PLOT_REGION,MODBAM_GTF)
@@ -4722,16 +5143,22 @@ def main() -> None:
             if mb and Path(mb).exists():
                 try: read_rows.extend(extract_modbam_source_data(sid,mech,Path(mb),MODBAM_PLOT_REGION))
                 except Exception as exc: print(f"[WARN] source-data extraction failed for {sid}: {exc}",file=sys.stderr)
-        write_tsv_gz(source_dir/"Figure1B_single_molecule_MM_ML_source_data.tsv.gz",read_rows)
+        write_tsv_gz(source_dir/"Figure1A_single_molecule_MM_ML_source_data.tsv.gz",read_rows)
 
     # Nature-style minimum underlying source data.
-    write_tsv(source_dir/"Figure1A_design_source_data.tsv",[
-        {"mechanism":"Control","state":"M/P"},{"mechanism":"PWS-DEL","state":"M/deleted"},
-        {"mechanism":"AS-DEL","state":"deleted/P"},{"mechanism":"PWS-mUPD","state":"M/M"}])
-    write_tsv(source_dir/"Figure1C_cohort_methylation_source_data.tsv",panel_rows)
-    write_tsv(source_dir/"Figure1D_QC_source_data.tsv",support_rows)
+    write_tsv(source_dir/"Figure1B_cohort_methylation_source_data.tsv",panel_rows)
+    write_tsv(source_dir/"Figure1_parental_reference_model_source_data.tsv",parental_reference_rows)
+    write_tsv(source_dir/"Figure1C_sequencing_support_source_data.tsv",support_rows)
 
-    create_figure(figure_dir/"Figure1_mechanistic",panel_rows,support_rows,modbam_panels,MODBAM_PLOT_REGION,inference_rows)
+    create_main_figure(
+        figure_dir / "Figure1_mechanistic",
+        panel_rows,
+        modbam_panels,
+        MODBAM_PLOT_REGION,
+        support_rows,
+        inference_rows,
+        parental_reference,
+    )
     write_report(
         report_dir / "Figure1_report.md",
         mechanistic_rows=mechanistic_rows,
@@ -4744,6 +5171,8 @@ def main() -> None:
         structural_rows=list(structural.values()),
         cn_classification_rows=cn_classification_rows,
         preflight_rows=preflight,
+        parental_reference=parental_reference,
+        parental_reference_rows=parental_reference_rows,
         outdir=outdir,
     )
 
@@ -4752,12 +5181,32 @@ def main() -> None:
     run_parameters={
         "reference":"T2T-CHM13v2.0","cohort":[{"sample_id":s,"diagnosis":c,"mechanism":m} for s,c,m in sorted_cohort()],
         "regions":{"domain":[CHROM,DOMAIN_START,DOMAIN_END],"PWS_AS_IC":[CHROM,PWS_IC_START,PWS_IC_END],"modbam_display":MODBAM_PLOT_REGION},
-        "state_thresholds":{"maternal":MATERNAL_THRESHOLD,"paternal":PATERNAL_THRESHOLD,"sensitivity":THRESHOLD_SENSITIVITY},
+        "figure_layout":{
+            "panel_a":"enlarged representative single-molecule ModBAM profiles",
+            "panel_b":"complete-cohort IC methylation matrix",
+            "panel_c":"continuous sequencing depth and haplotype support",
+            "omitted":"redundant conceptual molecular-configuration schematic",
+        },
+        "parental_state_model":{
+            "method":PARENTAL_REFERENCE_METHOD,
+            "controls_used":list(parental_reference.control_sample_ids),
+            "maternal_reference_beta":parental_reference.maternal_reference,
+            "paternal_reference_beta":parental_reference.paternal_reference,
+            "decision_boundary_beta":parental_reference.decision_boundary,
+            "leave_one_control_out_for_controls":CONTROL_REFERENCE_LEAVE_ONE_OUT,
+            "classification_rule":"M if descriptive CpG-bootstrap CI is entirely above control-derived boundary; P if entirely below; otherwise uncertain; nearest centroid fallback if CI unavailable",
+        },
+        "supplementary_extreme_threshold_sensitivity":{
+            "legacy_maternal_threshold":EXTREME_MATERNAL_THRESHOLD,
+            "legacy_paternal_threshold":EXTREME_PATERNAL_THRESHOLD,
+            "grid":THRESHOLD_SENSITIVITY,
+        },
         "technical_thresholds":{
             "state_min_mean_coverage":MIN_STATE_MEAN_COVERAGE,
             "state_min_CpGs":MIN_STATE_CPGS,
-            "nominal_mean_coverage":NOMINAL_MEAN_COVERAGE,
-            "nominal_CpGs":NOMINAL_CPGS,
+            "higher_coverage_reference_mean_coverage":HIGHER_COVERAGE_MEAN_COVERAGE,
+            "higher_coverage_reference_CpGs":HIGHER_COVERAGE_CPGS,
+            "interpretation":"Values below the higher-coverage reference remain valid when they meet state-assignment minima; they are not sample failures.",
             "modbam_min_MAPQ":MODBAM_MIN_MAPQ,
             "modbam_fallback_min_molecules":MIN_MODBAM_FALLBACK_MOLECULES,
         },
