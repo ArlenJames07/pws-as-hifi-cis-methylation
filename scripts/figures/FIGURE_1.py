@@ -22,10 +22,10 @@ from typing import Any
 
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.colors import TwoSlopeNorm
+from matplotlib.colors import TwoSlopeNorm, to_rgba
 from matplotlib.gridspec import GridSpec
 from matplotlib.lines import Line2D
-from matplotlib.patches import Rectangle
+from matplotlib.patches import ConnectionPatch, Polygon, Rectangle
 
 
 # ---------------------------------------------------------------------------
@@ -94,11 +94,21 @@ OUTDIR = DEFAULT_OUTDIR
 
 # ModBAMtools executable. Replace with a full path if it is not on PATH, e.g.
 # MODBAMTOOLS_BIN = "/home/rare/miniforge3/envs/modbamtools/bin/modbamtools"
-MODBAMTOOLS_BIN = "modbamtools"
+MODBAMTOOLS_BIN = "/home/rare/miniconda3/envs/modbam38/bin/modbamtools"
+USE_EXTERNAL_MODBAMTOOLS = False
 
 # Optional ModBAMtools gene annotation. Leave None unless you have prepared
 # the indexed annotation required by ModBAMtools.
 MODBAM_GTF: Path | None = None
+
+# Standard GTF used for the compact gene context above the Panel B CNV tracks.
+# Only a curated set of established 15q11-q13 genes is shown to avoid turning
+# the overview into an unreadable transcript annotation panel.
+PANEL_B_GTF: Path | None = DEFAULT_GTF
+PANEL_B_GENE_NAMES = (
+    "MKRN3", "MAGEL2", "NDN", "NPAP1", "SNHG14", "SNRPN", "UBE3A",
+    "ATP10A", "GABRB3", "GABRA5", "GABRG3", "OCA2", "HERC2",
+)
 
 # Raw single-molecule interval plotted in Figure 1A.
 MODBAM_PLOT_REGION = MODBAM_REGION
@@ -117,7 +127,13 @@ GENERATE_READ_LEVEL_SOURCE_DATA = True
 # interval to primary alignments with MAPQ >= this threshold before calling
 # ModBAMtools, rather than relying on renderer-specific defaults.
 MODBAM_MIN_MAPQ = 20
-MODBAM_PLOT_WIDTH = 1600
+MODBAM_PLOT_WIDTH = 2400
+MODBAM_FREQUENCY_BIN_BP = 100
+
+# Raster output is intended for final publication assembly. PDF and SVG remain
+# the preferred editable/vector deliverables. The large 900-dpi PNG is intended
+# to keep single-molecule marks and compact annotations legible at ordinary zoom.
+PUBLICATION_DPI = 900
 
 # Descriptive uncertainty for allele-level beta values is estimated by
 # coverage-weighted bootstrap resampling of CpG sites. Formal group inference
@@ -147,13 +163,14 @@ HASH_LARGE_INPUTS = False
 HASH_MAX_BYTES = 100 * 1024 * 1024
 
 
-# Main raw-modBAM panels. Disease controls remain in the quantitative cohort
-# panel but are not used as one of the four principal molecular configurations.
+# One representative raw-ModBAM panel is shown for every heatmap cohort block.
+# This order matches the vertical order used by sorted_cohort().
 MODBAM_GROUP_ORDER = [
-    "Control",
     "PWS-DEL",
     "AS-DEL",
     "PWS-mUPD",
+    "Disease control",
+    "Control",
 ]
 
 # Primary parental-state assignment is NOT based on fixed beta cutoffs.
@@ -181,6 +198,16 @@ HIGHER_COVERAGE_CPGS = 5
 HIGHER_COVERAGE_MEAN_COVERAGE = 10.0
 MIN_MODBAM_FALLBACK_MOLECULES = 3
 
+# Deletion-span parental-profile classifier. Unaffected-control haplotypes are
+# first labelled M-like/P-like at the IC. Across each CN-defined deletion span,
+# CpGs are retained only when the two control M-like profiles and the two
+# control P-like profiles are internally consistent and well separated. The
+# retained chromosome is then assigned by RMSE to the two empirical profiles.
+DELETION_PROFILE_MIN_REFERENCE_DELTA = 0.50
+DELETION_PROFILE_MAX_WITHIN_STATE_RANGE = 0.15
+DELETION_PROFILE_MIN_SHARED_CPGS = 50
+DELETION_PROFILE_MIN_SCORE_MAGNITUDE = 0.05
+
 # Backward-compatible aliases retained for downstream configuration readers.
 NOMINAL_CPGS = HIGHER_COVERAGE_CPGS
 NOMINAL_MEAN_COVERAGE = HIGHER_COVERAGE_MEAN_COVERAGE
@@ -189,7 +216,7 @@ MIN_CPGS = HIGHER_COVERAGE_CPGS
 
 # HiFiCNV / deletion classification on T2T-CHM13v2.0.
 # Coordinates are the same chr15 landmarks used by the manuscript Figure 5.
-CN_PLOT_START = 19_500_000
+CN_PLOT_START = 18_000_000
 CN_PLOT_END = 32_500_000
 CN_DELETION_THRESHOLD = 1.35
 CN_NORMAL_EXPECTED = 2.0
@@ -289,7 +316,7 @@ STATE_COLORS = {
     "?": "#F3F3F3",
 }
 ABSENT_EDGE = "#A6A6A6"
-TEXT_SCALE = 1.05
+TEXT_SCALE = 1.18
 
 
 def fs(size: float) -> float:
@@ -394,7 +421,7 @@ def validate_configuration() -> None:
             f"METADATA_PATH does not exist: {METADATA_PATH}"
         )
 
-    if not SKIP_MODBAMTOOLS:
+    if not SKIP_MODBAMTOOLS and USE_EXTERNAL_MODBAMTOOLS:
         executable = str(MODBAMTOOLS_BIN)
         if shutil.which(executable) is None and not Path(executable).exists():
             raise FileNotFoundError(
@@ -1732,7 +1759,7 @@ def render_supplementary_cn_profiles(
         fig.tight_layout()
         base = profile_dir / f"{labels[sample_id]}_{sample_id}_chr15_CN"
         fig.savefig(base.with_suffix(".pdf"), bbox_inches="tight")
-        fig.savefig(base.with_suffix(".png"), dpi=300, bbox_inches="tight")
+        fig.savefig(base.with_suffix(".png"), dpi=PUBLICATION_DPI, bbox_inches="tight")
         plt.close(fig)
 
     # Cohort overview with identical axes for direct depth/CN comparison.
@@ -1768,7 +1795,7 @@ def render_supplementary_cn_profiles(
     fig.tight_layout(rect=[0, 0, 1, 0.992])
     base = outdir / "supplementary" / "Supplementary_chr15_CN_all_participants"
     fig.savefig(base.with_suffix(".pdf"), bbox_inches="tight")
-    fig.savefig(base.with_suffix(".png"), dpi=300, bbox_inches="tight")
+    fig.savefig(base.with_suffix(".png"), dpi=PUBLICATION_DPI, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -2362,6 +2389,255 @@ def build_physical_allele_rows(
 
 
 # ---------------------------------------------------------------------------
+# Deletion-span methylation-profile classification
+# ---------------------------------------------------------------------------
+
+def read_bigwig_region_values(
+    path: Path | None,
+    start: int,
+    end: int,
+) -> dict[int, float]:
+    """Return position-level methylation beta values from a pb-CpG BigWig."""
+    if path is None or not Path(path).exists() or start >= end:
+        return {}
+    try:
+        import pyBigWig
+    except ImportError as exc:
+        raise RuntimeError(
+            "Deletion-span classification requires pyBigWig."
+        ) from exc
+
+    values: dict[int, float] = {}
+    with pyBigWig.open(str(path)) as bw:
+        intervals = bw.intervals(CHROM, int(start), int(end)) or []
+    for interval_start, _interval_end, raw_value in intervals:
+        value = safe_float(raw_value)
+        if value is None:
+            continue
+        # pb-CpG-tools BigWigs in this project store percent methylation,
+        # including exact 0% and 1% values that must not be mistaken for beta.
+        beta = value / 100.0
+        if 0.0 <= beta <= 1.0:
+            values[int(interval_start)] = float(beta)
+    return values
+
+
+def _slice_profile(
+    values: dict[int, float],
+    start: int,
+    end: int,
+) -> dict[int, float]:
+    return {pos: value for pos, value in values.items() if start <= pos < end}
+
+
+def _profile_rmse_score(
+    observed: dict[int, float],
+    maternal_reference: dict[int, float],
+    paternal_reference: dict[int, float],
+    informative_positions: set[int],
+) -> dict[str, Any]:
+    """Classify one profile on a continuous -1 (P) to +1 (M) axis."""
+    shared = sorted(set(observed).intersection(informative_positions))
+    if len(shared) < DELETION_PROFILE_MIN_SHARED_CPGS:
+        return {
+            "n_shared_informative_CpGs": len(shared),
+            "rmse_to_maternal_profile": None,
+            "rmse_to_paternal_profile": None,
+            "parental_profile_score": None,
+            "profile_parental_class": "insufficient",
+        }
+
+    obs = np.asarray([observed[pos] for pos in shared], dtype=float)
+    maternal = np.asarray([maternal_reference[pos] for pos in shared], dtype=float)
+    paternal = np.asarray([paternal_reference[pos] for pos in shared], dtype=float)
+    rmse_m = float(np.sqrt(np.mean(np.square(obs - maternal))))
+    rmse_p = float(np.sqrt(np.mean(np.square(obs - paternal))))
+    denominator = rmse_m + rmse_p
+    score = float((rmse_p - rmse_m) / denominator) if denominator > 0 else 0.0
+    if score >= DELETION_PROFILE_MIN_SCORE_MAGNITUDE:
+        profile_class = "maternal-like"
+    elif score <= -DELETION_PROFILE_MIN_SCORE_MAGNITUDE:
+        profile_class = "paternal-like"
+    else:
+        profile_class = "uncertain"
+    return {
+        "n_shared_informative_CpGs": len(shared),
+        "rmse_to_maternal_profile": rmse_m,
+        "rmse_to_paternal_profile": rmse_p,
+        "parental_profile_score": score,
+        "profile_parental_class": profile_class,
+    }
+
+
+def build_deletion_profile_classification_rows(
+    sample_files: dict[str, dict[str, Path | None]],
+    structural_by_sample: dict[str, dict[str, Any]],
+    panel_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Classify methylation tracks across each CN-defined deletion interval.
+
+    Unaffected controls alone define the M-like and P-like position-level
+    references. The control haplotype identity is anchored by its IC state;
+    disease-control haplotypes are held out and used only for validation.
+    """
+    panel_by_sample = {row["sample_id"]: row for row in panel_rows}
+    labels = sample_display_labels()
+    deletion_samples = [
+        (sample_id, mechanism, structural_by_sample[sample_id])
+        for sample_id, _clinical, mechanism in sorted_cohort()
+        if mechanism in {"PWS-DEL", "AS-DEL"}
+        and structural_by_sample[sample_id].get("ic_deletion_status") == "confirmed"
+    ]
+    intervals = [
+        (int(row["cn_event_start"]), int(row["cn_event_end"]))
+        for _sample_id, _mechanism, row in deletion_samples
+        if safe_float(row.get("cn_event_start")) is not None
+        and safe_float(row.get("cn_event_end")) is not None
+    ]
+    if not intervals:
+        return []
+    union_start = min(start for start, _end in intervals)
+    union_end = max(end for _start, end in intervals)
+    common_start = max(start for start, _end in intervals)
+    common_end = min(end for _start, end in intervals)
+
+    control_profiles: dict[str, list[dict[int, float]]] = {"M": [], "P": []}
+    for sample_id, _clinical, mechanism in sorted_cohort():
+        if mechanism != "Control":
+            continue
+        panel_row = panel_by_sample.get(sample_id, {})
+        for allele_index, key in ((1, "hap1_bw"), (2, "hap2_bw")):
+            state = str(panel_row.get(f"allele_{allele_index}_pattern_short", ""))
+            if state not in {"M", "P"}:
+                continue
+            profile = read_bigwig_region_values(
+                sample_files[sample_id].get(key), union_start, union_end
+            )
+            if profile:
+                control_profiles[state].append(profile)
+
+    if len(control_profiles["M"]) < 2 or len(control_profiles["P"]) < 2:
+        raise RuntimeError(
+            "Deletion-span classification requires two unaffected-control "
+            "M-like and two P-like haplotype profiles."
+        )
+
+    def make_reference(start: int, end: int) -> tuple[dict[int, float], dict[int, float], set[int]]:
+        maternal_profiles = [_slice_profile(profile, start, end) for profile in control_profiles["M"]]
+        paternal_profiles = [_slice_profile(profile, start, end) for profile in control_profiles["P"]]
+        shared = set(maternal_profiles[0])
+        for profile in maternal_profiles[1:] + paternal_profiles:
+            shared.intersection_update(profile)
+        maternal_reference = {
+            pos: float(np.median([profile[pos] for profile in maternal_profiles]))
+            for pos in shared
+        }
+        paternal_reference = {
+            pos: float(np.median([profile[pos] for profile in paternal_profiles]))
+            for pos in shared
+        }
+        informative = {
+            pos
+            for pos in shared
+            if abs(maternal_reference[pos] - paternal_reference[pos])
+            >= DELETION_PROFILE_MIN_REFERENCE_DELTA
+            and (max(profile[pos] for profile in maternal_profiles)
+                 - min(profile[pos] for profile in maternal_profiles))
+            <= DELETION_PROFILE_MAX_WITHIN_STATE_RANGE
+            and (max(profile[pos] for profile in paternal_profiles)
+                 - min(profile[pos] for profile in paternal_profiles))
+            <= DELETION_PROFILE_MAX_WITHIN_STATE_RANGE
+        }
+        return maternal_reference, paternal_reference, informative
+
+    rows: list[dict[str, Any]] = []
+    for sample_id, mechanism, structural_row in deletion_samples:
+        start = int(structural_row["cn_event_start"])
+        end = int(structural_row["cn_event_end"])
+        maternal_reference, paternal_reference, informative = make_reference(start, end)
+        observed = read_bigwig_region_values(
+            sample_files[sample_id].get("combined_bw"), start, end
+        )
+        metrics = _profile_rmse_score(
+            observed, maternal_reference, paternal_reference, informative
+        )
+        panel_row = panel_by_sample.get(sample_id, {})
+        observed_index = 1 if mechanism == "PWS-DEL" else 2
+        ic_short = str(panel_row.get(f"allele_{observed_index}_pattern_short", "?"))
+        ic_class = {"M": "maternal-like", "P": "paternal-like"}.get(ic_short, "uncertain")
+        expected_class = "maternal-like" if mechanism == "PWS-DEL" else "paternal-like"
+        profile_class = str(metrics["profile_parental_class"])
+        if profile_class in {"maternal-like", "paternal-like"}:
+            integrated = (
+                f"concordant {profile_class}"
+                if profile_class == ic_class
+                else f"discordant: profile {profile_class}, IC {ic_class}"
+            )
+        else:
+            integrated = f"profile {profile_class}; IC {ic_class}"
+        rows.append({
+            "sample_id": sample_id,
+            "display_label": labels[sample_id],
+            "molecular_mechanism": mechanism,
+            "track_role": "retained deletion chromosome",
+            "haplotype_label": "retained",
+            "evaluation_interval": "sample-specific CN deletion",
+            "evaluation_start": start,
+            "evaluation_end": end,
+            "deletion_size_mb": fmt((end - start) / 1e6),
+            "n_control_informative_CpGs": len(informative),
+            **{key: fmt(value) if isinstance(value, float) else value for key, value in metrics.items()},
+            "IC_parental_class": ic_class,
+            "expected_parental_class": expected_class,
+            "integrated_classification": integrated,
+            "profile_matches_expected": str(profile_class == expected_class),
+        })
+
+    # Controls and DiGeorge disease controls are evaluated on the interval
+    # shared by every deletion. They provide separated haplotype benchmarks but
+    # do not contribute to the empirical reference fit unless they are controls.
+    common_maternal, common_paternal, common_informative = make_reference(
+        common_start, common_end
+    )
+    for sample_id, _clinical, mechanism in sorted_cohort():
+        if mechanism not in {"Control", "Disease control"}:
+            continue
+        panel_row = panel_by_sample.get(sample_id, {})
+        for allele_index, key in ((1, "hap1_bw"), (2, "hap2_bw")):
+            observed = read_bigwig_region_values(
+                sample_files[sample_id].get(key), common_start, common_end
+            )
+            metrics = _profile_rmse_score(
+                observed, common_maternal, common_paternal, common_informative
+            )
+            ic_short = str(panel_row.get(f"allele_{allele_index}_pattern_short", "?"))
+            ic_class = {"M": "maternal-like", "P": "paternal-like"}.get(ic_short, "uncertain")
+            profile_class = str(metrics["profile_parental_class"])
+            rows.append({
+                "sample_id": sample_id,
+                "display_label": labels[sample_id],
+                "molecular_mechanism": mechanism,
+                "track_role": "reference" if mechanism == "Control" else "held-out disease control",
+                "haplotype_label": f"H{allele_index}",
+                "evaluation_interval": "shared deletion core",
+                "evaluation_start": common_start,
+                "evaluation_end": common_end,
+                "deletion_size_mb": "",
+                "n_control_informative_CpGs": len(common_informative),
+                **{key: fmt(value) if isinstance(value, float) else value for key, value in metrics.items()},
+                "IC_parental_class": ic_class,
+                "expected_parental_class": ic_class,
+                "integrated_classification": (
+                    f"concordant {profile_class}"
+                    if profile_class == ic_class
+                    else f"profile {profile_class}; IC {ic_class}"
+                ),
+                "profile_matches_expected": str(profile_class == ic_class),
+            })
+    return rows
+
+
+# ---------------------------------------------------------------------------
 # Mechanistic classification
 # ---------------------------------------------------------------------------
 
@@ -2822,7 +3098,7 @@ def choose_representative_modbam_samples(
     sample_files: dict[str, dict[str, Path | None]],
 ) -> dict[str, dict[str, Any]]:
     """
-    Select one representative sample per principal molecular configuration.
+    Select one representative sample for every cohort block in the heatmap.
 
     Selection is deterministic: choose the individual whose total IC depth is
     closest to the within-group median IC depth. This prevents aesthetic
@@ -2907,6 +3183,180 @@ def prepare_standardized_modbam(bam_path: Path, region: str, output_dir: Path, s
     return filtered
 
 
+def render_internal_modbam_panel(
+    bam_path: Path,
+    sample_label: str,
+    mechanism: str,
+    region: str,
+    output_path: Path,
+) -> Path:
+    """Render a compact IGV-like molecule panel directly from MM/ML tags."""
+    try:
+        import pysam
+    except ImportError as exc:
+        raise RuntimeError("Internal ModBAM rendering requires pysam.") from exc
+
+    chrom, start, end = parse_region(region)
+    use_hap = mechanism in {"Control", "Disease control", "PWS-mUPD"}
+    reads_by_group: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    position_probabilities_by_group: dict[str, dict[int, list[float]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+
+    with pysam.AlignmentFile(str(bam_path), "rb") as bam:
+        for read in bam.fetch(chrom, start, end):
+            if read.is_unmapped or read.is_secondary or read.is_supplementary or read.is_duplicate:
+                continue
+            if read.mapping_quality < MODBAM_MIN_MAPQ:
+                continue
+            hp = None
+            if read.has_tag("HP"):
+                try:
+                    hp = int(read.get_tag("HP"))
+                except (TypeError, ValueError):
+                    hp = None
+            if use_hap and hp not in {1, 2}:
+                # Biparental panels intentionally contain exactly two traces and
+                # two molecule groups: HP1 and HP2. Untagged reads are excluded.
+                continue
+            group = f"HP{hp}" if use_hap else "retained"
+            q_to_r = {
+                query_pos: ref_pos
+                for query_pos, ref_pos in read.get_aligned_pairs(matches_only=False)
+                if query_pos is not None and ref_pos is not None
+            }
+            calls: list[tuple[int, float]] = []
+            for key, modified_calls in (read.modified_bases or {}).items():
+                canonical, _strand, modification = key
+                if str(canonical).upper() != "C":
+                    continue
+                if str(modification).lower() not in {"m", "5mc", "c+m"}:
+                    continue
+                for query_pos, quality in modified_calls:
+                    ref_pos = q_to_r.get(query_pos)
+                    if ref_pos is None or quality is None or quality < 0:
+                        continue
+                    if start <= ref_pos < end:
+                        probability = float(quality) / 255.0
+                        calls.append((ref_pos, probability))
+                        position_probabilities_by_group[group][ref_pos].append(probability)
+            if not calls:
+                continue
+            reads_by_group[group].append({
+                "start": max(start, int(read.reference_start)),
+                "end": min(end, int(read.reference_end or end)),
+                "calls": sorted(calls),
+            })
+
+    group_order = [group for group in ("HP1", "HP2", "retained") if reads_by_group.get(group)]
+    if not group_order:
+        raise RuntimeError(f"No plottable MM/ML calls found in {bam_path} at {region}.")
+
+    # Cap only extremely deep tracks; deterministic evenly spaced selection
+    # preserves coverage across the complete stack without visual overplotting.
+    max_reads_per_group = 32
+    for group in group_order:
+        group_reads = sorted(reads_by_group[group], key=lambda item: (item["start"], item["end"]))
+        if len(group_reads) > max_reads_per_group:
+            indices = np.linspace(0, len(group_reads) - 1, max_reads_per_group).astype(int)
+            group_reads = [group_reads[index] for index in indices]
+        reads_by_group[group] = group_reads
+
+    height = 1.58 if use_hap else 1.42
+    fig = plt.figure(figsize=(8.0, height), constrained_layout=False)
+    grid = GridSpec(2, 1, figure=fig, height_ratios=[0.72, 0.42], hspace=0.055)
+    frequency_ax = fig.add_subplot(grid[0, 0])
+    molecule_ax = fig.add_subplot(grid[1, 0], sharex=frequency_ax)
+
+    trace_colors = {"HP1": "#D55E00", "HP2": "#0072B2", "retained": "#375A7F"}
+    for group in group_order:
+        group_values = position_probabilities_by_group[group]
+        binned_probabilities: dict[int, list[float]] = defaultdict(list)
+        for position, probabilities in group_values.items():
+            bin_index = (position - start) // MODBAM_FREQUENCY_BIN_BP
+            binned_probabilities[int(bin_index)].extend(probabilities)
+        positions = np.asarray(
+            [
+                start + (bin_index + 0.5) * MODBAM_FREQUENCY_BIN_BP
+                for bin_index in sorted(binned_probabilities)
+            ],
+            dtype=float,
+        )
+        frequency = np.asarray(
+            [
+                100.0 * np.mean(binned_probabilities[bin_index])
+                for bin_index in sorted(binned_probabilities)
+            ],
+            dtype=float,
+        )
+        if len(positions):
+            frequency_ax.plot(
+                positions, frequency, color=trace_colors[group], lw=1.05,
+                alpha=0.94, label=group,
+            )
+            frequency_ax.scatter(
+                positions, frequency, s=2.5, color=trace_colors[group],
+                alpha=0.70, linewidths=0,
+            )
+    frequency_ax.set_ylim(-4, 104)
+    frequency_ax.set_yticks([0, 50, 100])
+    frequency_ax.set_yticklabels(["0", "50", "100"], fontsize=4.6)
+    frequency_ax.set_ylabel("%", fontsize=4.8, labelpad=2)
+    frequency_ax.tick_params(axis="x", bottom=False, labelbottom=False)
+    frequency_ax.tick_params(axis="y", length=1.8, width=0.5)
+    frequency_ax.spines[["top", "right"]].set_visible(False)
+    frequency_ax.spines[["left", "bottom"]].set_linewidth(0.45)
+    frequency_ax.text(
+        0.5, 1.02, "Methylation frequency", transform=frequency_ax.transAxes,
+        ha="center", va="bottom", fontsize=4.8, color="#444444",
+    )
+    if use_hap:
+        frequency_ax.legend(
+            frameon=False, loc="upper right", ncol=2, fontsize=4.5,
+            handlelength=1.3, columnspacing=0.7, borderaxespad=0.2,
+        )
+
+    current_y = 0
+    group_centres: list[tuple[str, float]] = []
+    for group_index, group in enumerate(group_order):
+        group_start = current_y
+        for read in reads_by_group[group]:
+            molecule_ax.hlines(
+                current_y, read["start"], read["end"],
+                color="#97A6B2", lw=0.48, alpha=0.86, zorder=1,
+            )
+            call_x = [call[0] for call in read["calls"]]
+            call_p = [call[1] for call in read["calls"]]
+            molecule_ax.scatter(
+                call_x, [current_y] * len(call_x), c=call_p,
+                cmap="coolwarm", vmin=0, vmax=1, s=4.0,
+                marker="|", linewidths=0.55, alpha=0.98, zorder=2,
+            )
+            current_y += 1
+        group_centres.append((group, (group_start + current_y - 1) / 2.0))
+        if group_index < len(group_order) - 1:
+            molecule_ax.axhline(current_y - 0.5, color="#555555", lw=0.55, alpha=0.55)
+            current_y += 1
+
+    molecule_ax.set_xlim(start, end)
+    molecule_ax.set_ylim(current_y - 0.3, -0.7)
+    molecule_ax.set_yticks([centre for _group, centre in group_centres])
+    molecule_ax.set_yticklabels([group for group, _centre in group_centres], fontsize=4.7)
+    ticks = np.linspace(start, end, 5)
+    molecule_ax.set_xticks(ticks)
+    molecule_ax.set_xticklabels([f"{tick / 1e6:.3f}" for tick in ticks], fontsize=4.5)
+    molecule_ax.set_xlabel(f"{chrom} position (Mb)", fontsize=4.8, labelpad=1.5)
+    molecule_ax.tick_params(axis="both", length=1.8, width=0.45, pad=1.2)
+    molecule_ax.spines[["top", "right"]].set_visible(False)
+    molecule_ax.spines[["left", "bottom"]].set_linewidth(0.45)
+
+    fig.subplots_adjust(left=0.060, right=0.995, top=0.955, bottom=0.21)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=300, facecolor="white")
+    plt.close(fig)
+    return output_path
+
+
 def run_modbamtools_plot(
     modbamtools_bin: str,
     bam_path: Path,
@@ -2959,6 +3409,15 @@ def run_modbamtools_plot(
     safe_mechanism = mechanism.lower().replace("-", "_").replace(" ", "_")
     prefix = f"Figure1A_{safe_mechanism}_{sample_label}"
 
+    if not USE_EXTERNAL_MODBAMTOOLS:
+        return render_internal_modbam_panel(
+            filtered_bam,
+            sample_label,
+            mechanism,
+            region,
+            output_dir / f"{prefix}.png",
+        )
+
     command = [
         executable,
         "plot",
@@ -3006,7 +3465,7 @@ def build_modbamtools_panels(
     region: str,
     gtf_path: Path | None,
 ) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
-    """Generate the four raw panels and a publication provenance table."""
+    """Generate one raw panel per cohort block and a provenance table."""
     panel_dir = outdir / "modbamtools"
     panel_dir.mkdir(parents=True, exist_ok=True)
 
@@ -3044,6 +3503,7 @@ def build_modbamtools_panels(
                 "region": region,
                 "modbam": str(representative["modbam"]),
                 "plot_filename": png.name,
+                "renderer": "ModBAMtools" if USE_EXTERNAL_MODBAMTOOLS else "internal MM/ML renderer",
                 "haplotype_grouping": "HP tag" if use_hap else "not forced (hemizygous IC)",
             }
         )
@@ -3096,7 +3556,7 @@ def render_extended_modbam_contact_sheet(outdir: Path, rows: list[dict[str, Any]
     fig.tight_layout(rect=[0, 0, 1, 0.98])
     outbase = outdir / "extended_data" / "ExtendedData_Figure1_all_modbamtools"
     fig.savefig(outbase.with_suffix(".pdf"), bbox_inches="tight")
-    fig.savefig(outbase.with_suffix(".png"), dpi=300, bbox_inches="tight")
+    fig.savefig(outbase.with_suffix(".png"), dpi=PUBLICATION_DPI, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -3368,7 +3828,7 @@ def render_parental_reference_calibration(
     base = outdir / "supplementary" / "Supplementary_parental_reference_calibration"
     base.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(base.with_suffix(".pdf"), bbox_inches="tight")
-    fig.savefig(base.with_suffix(".png"), dpi=300, bbox_inches="tight")
+    fig.savefig(base.with_suffix(".png"), dpi=PUBLICATION_DPI, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -3377,87 +3837,141 @@ def render_parental_reference_calibration(
 # ---------------------------------------------------------------------------
 
 
+def draw_local_ic_gene_track(ax: plt.Axes) -> None:
+    """Shared gene/ICR context for the five ModBAM profiles in Panel A."""
+    start_mb = MODBAM_REGION_START / 1e6
+    end_mb = MODBAM_REGION_END / 1e6
+    ax.set_xlim(start_mb, end_mb)
+    ax.set_ylim(0.0, 2.15)
+    ax.set_yticks([])
+    ax.tick_params(axis="x", bottom=False, labelbottom=False)
+
+    for y, name, color in (
+        (1.42, "SNRPN / SNURF", "#444444"),
+        (0.66, "SNHG14", "#777777"),
+    ):
+        ax.annotate(
+            "", xy=(end_mb, y), xytext=(start_mb, y),
+            arrowprops={"arrowstyle": "-|>", "lw": 1.15, "color": color, "mutation_scale": 7},
+        )
+        ax.text(
+            start_mb + 0.00005, y + 0.12, name,
+            ha="left", va="bottom", fontsize=fs(5.8),
+            fontstyle="italic", color=color,
+        )
+
+    icr_start = PWS_IC_START / 1e6
+    icr_end = PWS_IC_END / 1e6
+    ax.axvspan(icr_start, icr_end, color="#CC79A7", alpha=0.18, lw=0)
+    ax.text(
+        (icr_start + icr_end) / 2.0, 2.02,
+        f"PWS/AS ICR  {PWS_IC_START:,}–{PWS_IC_END:,}",
+        ha="center", va="top", fontsize=fs(5.8),
+        color="#A64C91", fontweight="bold",
+    )
+    ax.set_title(
+        f"Local gene context · {CHROM}:{MODBAM_REGION_START:,}–{MODBAM_REGION_END:,}",
+        loc="left", fontsize=fs(6.2), fontweight="bold", pad=1,
+    )
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+
 def draw_single_molecule_panel(
     fig: plt.Figure,
     spec: Any,
     panels: dict[str, dict[str, Any]],
     region: str,
-    panel_label: str = "a",
+    panel_rows: list[dict[str, Any]],
+    connector_ax: plt.Axes | None = None,
+    panel_label: str = "A",
 ) -> list[plt.Axes]:
-    """Embed four ModBAMtools PNGs as raw single-molecule evidence."""
+    """Stack readable representative ModBAM tracks and connect each block.
+
+    The enclosing Figure 1 layout owns the shared Panel A heading and caption.
+    Track heights follow their source-image aspect ratios, preserving both the
+    methylation-frequency panel and raw-molecule rows without vertical crushing.
+    """
+    available = [mechanism for mechanism in MODBAM_GROUP_ORDER if mechanism in panels]
+    loaded_images = {mechanism: plt.imread(panels[mechanism]["image"]) for mechanism in available}
+    image_height_ratios = [
+        max(0.10, image.shape[0] / max(image.shape[1], 1))
+        for image in loaded_images.values()
+    ]
     grid = spec.subgridspec(
-        4,
-        2,
-        height_ratios=[0.11, 1.0, 1.0, 0.08],
-        hspace=0.16,
-        wspace=0.08,
+        len(available) + 1, 1,
+        height_ratios=[0.085, *image_height_ratios],
+        hspace=0.18,
     )
 
-    header_ax = fig.add_subplot(grid[0, :])
-    header_ax.axis("off")
-    header_ax.text(
-        0.5,
-        0.72,
-        f"{panel_label}. Raw single-molecule methylation evidence at the PWS/AS IC",
-        ha="center",
-        va="center",
-        fontsize=fs(11),
-        fontweight="bold",
-    )
-    header_ax.text(
-        0.5,
-        0.16,
-        f"ModBAMtools | {region} | T2T-CHM13v2.0",
-        ha="center",
-        va="center",
-        fontsize=fs(6.7),
-        color="#666666",
-    )
-
-    footer_ax = fig.add_subplot(grid[3, :])
-    footer_ax.axis("off")
-    footer_ax.text(
-        0.5,
-        0.55,
-        (
-            f"PWS/AS IC: {PWS_IC_START:,}–{PWS_IC_END:,}; "
-            f"shared transition core: {SHARED_CORE_START:,}–{SHARED_CORE_END:,}. "
-            "Representative = IC depth closest to the within-group median."
-        ),
-        ha="center",
-        va="center",
-        fontsize=fs(6.0),
-        color="#666666",
-    )
+    gene_ax = fig.add_subplot(grid[0, 0])
+    draw_local_ic_gene_track(gene_ax)
 
     axes: list[plt.Axes] = []
     titles = {
-        "Control": f"{panel_label}1. Control — biparental",
-        "PWS-DEL": f"{panel_label}2. PWS-DEL — maternal retained",
-        "AS-DEL": f"{panel_label}3. AS-DEL — paternal retained",
-        "PWS-mUPD": f"{panel_label}4. PWS-mUPD — maternal + maternal",
+        "Control": "Control · biparental",
+        "PWS-DEL": "PWS-DEL · maternal retained",
+        "AS-DEL": "AS-DEL · paternal retained",
+        "PWS-mUPD": "PWS-mUPD · maternal + maternal",
+        "Disease control": "Disease control · biparental",
     }
 
-    for index, mechanism in enumerate(MODBAM_GROUP_ORDER):
-        row = 1 + index // 2
-        col = index % 2
-        ax = fig.add_subplot(grid[row, col])
+    for track_index, mechanism in enumerate(available):
+        group_indices = [
+            i for i, row in enumerate(panel_rows)
+            if row["molecular_mechanism"] == mechanism
+        ]
+        if not group_indices:
+            continue
+
+        group_center = float(np.mean(group_indices))
+        ax = fig.add_subplot(grid[track_index + 1, 0])
         axes.append(ax)
 
         panel = panels[mechanism]
-        image = plt.imread(panel["image"])
-        ax.imshow(image)
+        image = loaded_images[mechanism]
+        ax.imshow(image, aspect="auto", interpolation="none")
         ax.axis("off")
 
         grouping = "HP-grouped" if panel.get("haplotype_grouping") else "hemizygous"
+        representative_row = next(
+            (row for row in panel_rows if row["sample_id"] == panel.get("sample_id")),
+            None,
+        )
+        observed_percentages: list[str] = []
+        if representative_row is not None:
+            for allele_index in (1, 2):
+                if representative_row.get(f"allele_{allele_index}_status") != "observed":
+                    continue
+                beta = safe_float(representative_row.get(f"allele_{allele_index}_mean_methylation"))
+                if beta is not None:
+                    observed_percentages.append(f"{100 * beta:.0f}%")
+        methylation_label = "/".join(observed_percentages) if observed_percentages else "n/a"
         ax.set_title(
             f"{titles[mechanism]} | {panel['display_label']} | {grouping}",
-            fontsize=fs(7.2),
-            loc="left",
-            pad=3,
-            weight="bold",
+            loc="left", pad=1.5,
+            fontsize=fs(5.9), weight="bold",
             color=MECHANISM_COLORS[mechanism],
         )
+        ax.text(
+            0.995, 1.015, f"IC methylation: {methylation_label}",
+            transform=ax.transAxes, ha="right", va="bottom",
+            fontsize=fs(7.0), fontweight="bold",
+            color=MECHANISM_COLORS[mechanism],
+            bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.92, "pad": 0.8},
+        )
+
+        if connector_ax is not None:
+            connector = ConnectionPatch(
+                xyA=(1.5, group_center), coordsA=connector_ax.transData,
+                xyB=(0.0, 0.5), coordsB=ax.transAxes,
+                arrowstyle="-|>", mutation_scale=8,
+                color=MECHANISM_COLORS[mechanism],
+                lw=0.9, alpha=0.75,
+                connectionstyle="arc3,rad=0.0",
+                clip_on=False, zorder=8,
+            )
+            fig.add_artist(connector)
 
     return axes
 
@@ -3466,7 +3980,10 @@ def draw_cohort_methylation_panel(
     note_ax: plt.Axes, heat_ax: plt.Axes, panel_a_rows: list[dict[str, Any]],
     inference_rows: list[dict[str, Any]] | None = None,
     parental_reference: ParentalReferenceModel | None = None,
-    panel_label: str = "b",
+    panel_label: str = "A",
+    cbar_ax: plt.Axes | None = None,
+    cbar_orientation: str = "vertical",
+    caption_ax: plt.Axes | None = None,
 ) -> None:
     n = len(panel_a_rows); values = np.full((n, 2), np.nan); statuses = np.empty((n, 2), dtype=object)
     insufficient_support = np.zeros((n, 2), dtype=bool)
@@ -3480,7 +3997,7 @@ def draw_cohort_methylation_panel(
                 )
     cmap = plt.get_cmap("coolwarm").copy(); cmap.set_bad("#FFFFFF")
     image = heat_ax.imshow(values, aspect="auto", cmap=cmap, norm=TwoSlopeNorm(vmin=0, vcenter=.5, vmax=1))
-    heat_ax.set_xticks([0,1]); heat_ax.set_xticklabels(["Resolved chromosome /\nhaplotype 1", "Resolved chromosome /\nhaplotype 2"], fontsize=fs(8))
+    heat_ax.set_xticks([0,1]); heat_ax.set_xticklabels(["Allele / haplotype 1", "Allele / haplotype 2"], fontsize=fs(7.2))
     heat_ax.set_yticks(range(n)); heat_ax.set_yticklabels([r["display_label"] for r in panel_a_rows], fontsize=fs(8), fontweight="bold")
     heat_ax.tick_params(length=0)
     for i,row in enumerate(panel_a_rows):
@@ -3504,31 +4021,61 @@ def draw_cohort_methylation_panel(
             ci_text = f"\n[{lo:.2f},{hi:.2f}]" if lo is not None and hi is not None else ""
             heat_ax.text(j,i,f"{beta:.2f} {patt}{ci_text}",ha="center",va="center",fontsize=fs(5.8),color=tc,zorder=4)
     for i in range(n-1):
-        if panel_a_rows[i]["molecular_mechanism"] != panel_a_rows[i+1]["molecular_mechanism"]: heat_ax.axhline(i+.5,color="#555",lw=.7)
+        if panel_a_rows[i]["molecular_mechanism"] != panel_a_rows[i+1]["molecular_mechanism"]:
+            heat_ax.axhline(i+.5, color="#2F2F2F", lw=1.35, zorder=6)
     note_ax.set_xlim(0,1); note_ax.set_ylim(heat_ax.get_ylim()); note_ax.axis("off")
     for mech in sorted(MECHANISM_ORDER,key=MECHANISM_ORDER.get):
         idx=[i for i,r in enumerate(panel_a_rows) if r["molecular_mechanism"]==mech]
         if idx:
             note_ax.text(.02,.5*(idx[0]+idx[-1]),f"{mech}\n(n={len(idx)})",ha="left",va="center",fontsize=fs(8),fontweight="bold",color=MECHANISM_COLORS[mech])
+            heat_ax.add_patch(Rectangle(
+                (-0.5, idx[0] - 0.5), 2.0, idx[-1] - idx[0] + 1.0,
+                facecolor="none", edgecolor=MECHANISM_COLORS[mech],
+                linewidth=2.6, zorder=7, clip_on=False,
+            ))
     heat_ax.set_title(
-        f"{panel_label}. IC methylation state across the complete cohort",
-        fontsize=fs(11), loc="left", x=-.73, pad=12, weight="bold"
+        "Cohort methylation heatmap",
+        fontsize=fs(8.2), loc="left", pad=7, weight="bold"
     )
-    cbar=plt.colorbar(image,ax=heat_ax,fraction=.048,pad=.025); cbar.set_label("Mean IC methylation (β)",fontsize=fs(8)); cbar.ax.tick_params(labelsize=fs(7))
+    cbar = heat_ax.figure.colorbar(
+        image,
+        ax=None if cbar_ax is not None else heat_ax,
+        cax=cbar_ax,
+        fraction=.048,
+        pad=.025,
+        orientation=cbar_orientation,
+    )
+    cbar.set_label("Mean IC methylation (β)", fontsize=fs(7.0))
+    cbar.ax.tick_params(labelsize=fs(6.5), length=2)
     if parental_reference is not None:
         state_note = (
-            f"Primary state = control-calibrated: P-ref={parental_reference.paternal_reference:.3f}, "
-            f"M-ref={parental_reference.maternal_reference:.3f}, boundary={parental_reference.decision_boundary:.3f}; "
-            "brackets = descriptive CpG-bootstrap 95% interval"
+            f"Control-calibrated references: P={parental_reference.paternal_reference:.3f}, "
+            f"M={parental_reference.maternal_reference:.3f}, boundary={parental_reference.decision_boundary:.3f}.\n"
+            "Brackets: descriptive CpG-bootstrap 95% intervals."
         )
     else:
-        state_note = "Primary state = control-calibrated parental reference; brackets = descriptive CpG-bootstrap 95% interval"
-    heat_ax.text(.5,-.10,state_note,
-                    transform=heat_ax.transAxes,ha="center",va="top",fontsize=fs(5.6),color="#666")
+        state_note = "Control-calibrated parental reference; brackets show descriptive CpG-bootstrap 95% intervals"
+    note_lines = [state_note]
     if inference_rows:
         r=inference_rows[0]
-        heat_ax.text(.5,-.17,f"Participant-level PWS-DEL vs AS-DEL: Δmedian={r['delta_median']} [95% CI {r['bootstrap_95CI_low']}, {r['bootstrap_95CI_high']}], exact permutation P={r['exact_permutation_p_two_sided']}",
-                        transform=heat_ax.transAxes,ha="center",va="top",fontsize=fs(5.6),color="#444")
+        note_lines.append(
+            f"Participant-level PWS-DEL vs AS-DEL: Δmedian={r['delta_median']} "
+            f"[95% CI {r['bootstrap_95CI_low']}, {r['bootstrap_95CI_high']}], "
+            f"exact permutation P={r['exact_permutation_p_two_sided']}"
+        )
+    if caption_ax is not None:
+        caption_ax.axis("off")
+        caption_ax.text(
+            0.0, 0.72, "\n".join(note_lines),
+            ha="left", va="top", fontsize=fs(5.5), color="#555555",
+            linespacing=1.35,
+        )
+    else:
+        heat_ax.text(
+            .5, -.10, "\n".join(note_lines),
+            transform=heat_ax.transAxes, ha="center", va="top",
+            fontsize=fs(5.6), color="#555555",
+        )
 
 
 def draw_panel_b(ax: plt.Axes, contrast_rows: list[dict[str, Any]]) -> None:
@@ -3626,123 +4173,202 @@ def draw_panel_b(ax: plt.Axes, contrast_rows: list[dict[str, Any]]) -> None:
     )
 
 
-def draw_panel_c(ax: plt.Axes, mechanistic_rows: list[dict[str, Any]]) -> None:
-    """
-    Mechanistic state-space.
+def _spread_label_positions(
+    values: list[float],
+    minimum_gap: float = 0.045,
+    lower: float = 0.035,
+    upper: float = 0.90,
+) -> list[float]:
+    """Return vertically separated label positions while preserving order."""
+    if not values:
+        return []
+    order = np.argsort(values)
+    placed = np.asarray([np.clip(values[i], lower, upper) for i in order], dtype=float)
+    for i in range(1, len(placed)):
+        placed[i] = max(placed[i], placed[i - 1] + minimum_gap)
+    if placed[-1] > upper:
+        placed -= placed[-1] - upper
+    for i in range(len(placed) - 2, -1, -1):
+        placed[i] = min(placed[i], placed[i + 1] - minimum_gap)
+    if placed[0] < lower:
+        placed += lower - placed[0]
+    result = np.empty(len(placed), dtype=float)
+    result[order] = placed
+    return result.tolist()
 
-    x = number of resolved physical chr15 alleles at the IC
-    y = mean methylation across those resolved alleles
 
-    For two-allele samples, marker size additionally represents allelic
-    methylation contrast. Thus canonical biparental samples have intermediate
-    mean methylation but high allelic contrast, whereas mUPD has high mean
-    methylation with low allelic contrast.
-    """
+def _convex_hull(points: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """Andrew monotone-chain hull used for the closed methylation clusters."""
+    unique = sorted(set(points))
+    if len(unique) <= 1:
+        return unique
+
+    def cross(
+        origin: tuple[float, float],
+        a: tuple[float, float],
+        b: tuple[float, float],
+    ) -> float:
+        return (a[0] - origin[0]) * (b[1] - origin[1]) - (a[1] - origin[1]) * (b[0] - origin[0])
+
+    lower: list[tuple[float, float]] = []
+    for point in unique:
+        while len(lower) >= 2 and cross(lower[-2], lower[-1], point) <= 0:
+            lower.pop()
+        lower.append(point)
+    upper: list[tuple[float, float]] = []
+    for point in reversed(unique):
+        while len(upper) >= 2 and cross(upper[-2], upper[-1], point) <= 0:
+            upper.pop()
+        upper.append(point)
+    return lower[:-1] + upper[:-1]
+
+
+def draw_panel_c(
+    ax: plt.Axes,
+    deletion_profile_rows: list[dict[str, Any]],
+) -> None:
+    """Compare each retained deletion track directly with control chromosomes."""
     ax.set_title(
-        "C. Mechanistic state-space of chromosome 15 imprinting",
-        fontsize=fs(11),
-        loc="left",
-        pad=12,
-        weight="bold",
+        "C. Retained methylation tracks versus control chromosomes",
+        fontsize=fs(10.2), loc="left", pad=12, weight="bold",
     )
-
-    # Expected mechanistic zones.
-    ax.add_patch(Rectangle((0.82, 0.79), 0.36, 0.20, facecolor="#F9E5E2", edgecolor="none", alpha=0.55))
-    ax.add_patch(Rectangle((0.82, 0.01), 0.36, 0.20, facecolor="#EEE8F7", edgecolor="none", alpha=0.55))
-    ax.add_patch(Rectangle((1.82, 0.79), 0.36, 0.20, facecolor="#E5EFF8", edgecolor="none", alpha=0.55))
-    ax.add_patch(Rectangle((1.82, 0.34), 0.36, 0.32, facecolor="#F3F3F3", edgecolor="none", alpha=0.65))
-
-    ax.text(1.0, 0.96, "PWS-DEL\nmaternal retained", ha="center", va="top", fontsize=fs(7), color=MECHANISM_COLORS["PWS-DEL"])
-    ax.text(1.0, 0.04, "AS-DEL\npaternal retained", ha="center", va="bottom", fontsize=fs(7), color=MECHANISM_COLORS["AS-DEL"])
-    ax.text(2.0, 0.96, "mUPD\nmaternal + maternal", ha="center", va="top", fontsize=fs(7), color=MECHANISM_COLORS["PWS-mUPD"])
-    ax.text(2.0, 0.36, "biparental chr15\nmaternal + paternal", ha="center", va="bottom", fontsize=fs(7), color="#555555")
-
-    # Deterministic jitter avoids exact overlap while preserving allele-count axis.
-    jitter_map = {}
-    for mechanism in MECHANISM_ORDER:
-        group = [r for r in mechanistic_rows if r["molecular_mechanism"] == mechanism]
-        offsets = np.linspace(-0.065, 0.065, max(len(group), 1))
-        for row, off in zip(group, offsets):
-            jitter_map[row["sample_id"]] = off
-
-    for row in mechanistic_rows:
-        n_alleles = safe_float(row["n_resolved_chr15_alleles"])
-        mean_beta = safe_float(row["mean_IC_methylation_across_resolved_alleles"])
-        if n_alleles is None or mean_beta is None:
-            continue
-
-        contrast = safe_float(row["allelic_methylation_contrast"])
-        marker_size = 65.0 if contrast is None else 55.0 + 145.0 * contrast
-        x = n_alleles + jitter_map.get(row["sample_id"], 0.0)
-        mechanism = row["molecular_mechanism"]
-
-        ax.scatter(
-            x,
-            mean_beta,
-            s=marker_size,
-            marker=MECHANISM_MARKERS[mechanism],
-            facecolor=MECHANISM_COLORS[mechanism],
-            edgecolor="white",
-            linewidth=0.8,
-            alpha=0.88,
-            zorder=4,
-        )
-
-        ax.annotate(
-            row["display_label"],
-            (x, mean_beta),
-            xytext=(3, 3),
-            textcoords="offset points",
-            fontsize=fs(5.8),
-            color="#333333",
-            zorder=5,
-        )
-
-    ax.set_xlim(0.72, 2.28)
-    ax.set_ylim(-0.02, 1.02)
-    ax.set_xticks([1, 2])
-    ax.set_xticklabels(
-        ["1 resolved allele\n(hemizygous state)", "2 resolved alleles\n(copy-neutral/biparental state)"],
-        fontsize=fs(8),
-    )
-    ax.set_ylabel(
-        "Mean IC methylation across resolved alleles",
-        fontsize=fs(9),
-    )
-    ax.grid(axis="y", color="#E8E8E8", lw=0.7)
-
-    handles = [
-        Line2D(
-            [0], [0],
-            marker=MECHANISM_MARKERS[m],
-            linestyle="none",
-            markerfacecolor=MECHANISM_COLORS[m],
-            markeredgecolor="white",
-            markersize=7,
-            label=m,
-        )
-        for m in sorted(MECHANISM_ORDER, key=MECHANISM_ORDER.get)
+    deletion_rows = [
+        row for row in deletion_profile_rows
+        if row.get("track_role") == "retained deletion chromosome"
     ]
-    ax.legend(
-        handles=handles,
-        frameon=False,
-        fontsize=fs(6.8),
-        loc="lower center",
-        bbox_to_anchor=(0.5, -0.30),
-        ncol=3,
-    )
+    control_rows = [
+        row for row in deletion_profile_rows
+        if row.get("track_role") == "reference"
+        and safe_float(row.get("parental_profile_score")) is not None
+    ]
+    maternal_control_scores = [
+        float(row["parental_profile_score"])
+        for row in control_rows if row.get("IC_parental_class") == "maternal-like"
+    ]
+    paternal_control_scores = [
+        float(row["parental_profile_score"])
+        for row in control_rows if row.get("IC_parental_class") == "paternal-like"
+    ]
+    maternal_centroid = float(np.median(maternal_control_scores)) if maternal_control_scores else 1.0
+    paternal_centroid = float(np.median(paternal_control_scores)) if paternal_control_scores else -1.0
 
+    ax.axvspan(-1.05, -DELETION_PROFILE_MIN_SCORE_MAGNITUDE,
+               color=STATE_COLORS["P"], alpha=0.055, lw=0, zorder=0)
+    ax.axvspan(DELETION_PROFILE_MIN_SCORE_MAGNITUDE, 1.05,
+               color=STATE_COLORS["M"], alpha=0.055, lw=0, zorder=0)
+    ax.axvspan(-DELETION_PROFILE_MIN_SCORE_MAGNITUDE,
+               DELETION_PROFILE_MIN_SCORE_MAGNITUDE,
+               color="#9E9E9E", alpha=0.12, lw=0, zorder=0)
+    ax.axvline(0, color="#666666", lw=0.75, ls="--", zorder=1)
+    ax.axvline(maternal_centroid, color=STATE_COLORS["M"], lw=1.25, ls="--", zorder=1)
+    ax.axvline(paternal_centroid, color=STATE_COLORS["P"], lw=1.25, ls="--", zorder=1)
+
+    ordered_rows = sorted(
+        deletion_rows,
+        key=lambda row: (
+            MECHANISM_ORDER.get(str(row.get("molecular_mechanism")), 99),
+            str(row.get("sample_id", "")),
+        ),
+    )
+    y_positions = np.arange(1, len(ordered_rows) + 1, dtype=float)
+
+    # The four unaffected-control chromosomes occupy one reference row. Labels
+    # are consolidated by parental class so they cannot collide with markers.
+    state_counts: dict[str, int] = defaultdict(int)
+    state_labels: dict[str, list[str]] = defaultdict(list)
+    for row in control_rows:
+        score = float(row["parental_profile_score"])
+        state = "M" if row.get("IC_parental_class") == "maternal-like" else "P"
+        y = -0.09 + 0.18 * state_counts[state]
+        state_counts[state] += 1
+        state_labels[state].append(f"{row['display_label']} {row['haplotype_label']}")
+        ax.scatter(
+            score, y, s=42, marker="D", facecolor=STATE_COLORS[state],
+            edgecolor="#333333", linewidth=0.8, zorder=4,
+        )
+
+    for y, row in zip(y_positions, ordered_rows):
+        score = safe_float(row.get("parental_profile_score"))
+        mechanism = str(row.get("molecular_mechanism", ""))
+        profile_class = str(row.get("profile_parental_class", "uncertain"))
+        if score is None:
+            score = 0.0
+            profile_class = "insufficient"
+        nearest_centroid = (
+            maternal_centroid
+            if abs(score - maternal_centroid) <= abs(score - paternal_centroid)
+            else paternal_centroid
+        )
+        state = (
+            "M" if profile_class == "maternal-like"
+            else "P" if profile_class == "paternal-like"
+            else "?"
+        )
+        ax.hlines(
+            y, min(score, nearest_centroid), max(score, nearest_centroid),
+            color=MECHANISM_COLORS[mechanism], lw=0.9,
+            ls=":" if profile_class in {"uncertain", "insufficient"} else "-",
+            alpha=0.58, zorder=2,
+        )
+        ax.scatter(
+            score, y, s=68, marker=MECHANISM_MARKERS[mechanism],
+            facecolor=STATE_COLORS[state], edgecolor=MECHANISM_COLORS[mechanism],
+            linewidth=1.1, zorder=4,
+        )
+        short_class = {
+            "maternal-like": "M-like", "paternal-like": "P-like",
+            "uncertain": "uncertain", "insufficient": "insufficient",
+        }.get(profile_class, profile_class)
+        label_x = 1.085
+        ax.annotate(
+            f"{short_class}  (score {score:+.2f})",
+            xy=(score, y), xytext=(label_x, y), textcoords="data",
+            ha="left", va="center", fontsize=fs(5.25),
+            color=MECHANISM_COLORS[mechanism], fontweight="bold", zorder=5,
+            bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.84, "pad": 0.7},
+            arrowprops={
+                "arrowstyle": "-", "lw": 0.42,
+                "color": MECHANISM_COLORS[mechanism], "alpha": 0.55,
+            },
+        )
+
+    ax.set_xlim(-1.06, 1.46)
+    ax.set_ylim(len(ordered_rows) + 0.65, -0.60)
+    ax.set_yticks([0.0, *y_positions])
+    ax.set_yticklabels(
+        ["Control chromosomes", *[row["display_label"] for row in ordered_rows]],
+        fontsize=fs(6.6), fontweight="bold",
+    )
+    for tick, row in zip(ax.get_yticklabels()[1:], ordered_rows):
+        tick.set_color(MECHANISM_COLORS[str(row["molecular_mechanism"])])
+    ax.set_xticks([-1.0, -0.5, 0.0, 0.5, 1.0])
+    ax.set_xlabel(
+        "Similarity to control chromosome methylation profiles\n"
+        "paternal-like ←   profile score   → maternal-like",
+        fontsize=fs(7.6),
+    )
+    ax.grid(axis="y", color="#E7E7E7", lw=0.65)
+    ax.tick_params(axis="x", labelsize=fs(6.7))
+    ax.tick_params(axis="y", length=0)
     ax.text(
-        0.02,
-        0.02,
-        "Marker size ∝ |allele 1 − allele 2| methylation contrast\n(two-allele genomes only)",
-        transform=ax.transAxes,
-        ha="left",
-        va="bottom",
-        fontsize=fs(6.1),
-        color="#666666",
+        paternal_centroid, -0.43,
+        "P control\n" + ", ".join(state_labels.get("P", [])),
+        ha="center", va="center",
+        color=STATE_COLORS["P"], fontsize=fs(5.5), fontweight="bold",
     )
-
+    ax.text(
+        maternal_centroid, -0.43,
+        "M control\n" + ", ".join(state_labels.get("M", [])),
+        ha="center", va="center",
+        color=STATE_COLORS["M"], fontsize=fs(5.5), fontweight="bold",
+    )
+    ax.text(
+        0.01, 0.01,
+        "Control endpoints are training anchors; movement toward 0 indicates "
+        "weaker whole-deletion profile similarity.",
+        transform=ax.transAxes, ha="left", va="bottom",
+        fontsize=fs(4.9), color="#666666",
+    )
 
 def _support_y_axis(ax: plt.Axes, support_rows: list[dict[str, Any]], show_y: bool) -> None:
     y = np.arange(len(support_rows))
@@ -3931,6 +4557,484 @@ def draw_sequencing_support_panel(
     draw_hp_balance_axis(metric_axes[3], support_rows, panel_labels[3])
 
 
+
+def _compact_deletion_display(structural_row: dict[str, Any]) -> tuple[str, str]:
+    """Return a concise Nature-style deletion label and size label."""
+    dtype = str(structural_row.get("deletion_type", "") or "").strip()
+    size_raw = structural_row.get("cn_event_size_mb", "")
+    try:
+        size_val = float(size_raw)
+        size_label = f"{size_val:.2f} Mb loss"
+    except Exception:
+        size_label = "size n/a"
+
+    if not dtype or dtype == "no chr15 deletion":
+        return "copy-neutral", size_label
+
+    if "Type I-like" in dtype:
+        core = "Type I-like"
+    elif "Type II-like" in dtype:
+        core = "Type II-like"
+    elif "BP1-BP3" in dtype:
+        core = "BP1-BP3-like"
+    elif "BP2-BP3" in dtype:
+        core = "BP2-BP3-like"
+    elif "atypical/extended" in dtype:
+        left = str(structural_row.get("left_landmark", "") or "").strip()
+        right = str(structural_row.get("right_landmark", "") or "").strip()
+        if left and right and left != "unassigned" and right != "unassigned":
+            core = f"Atypical {left}-{right}"
+        else:
+            core = "Atypical / extended"
+    else:
+        core = dtype
+
+    # The mechanism is already encoded by the row label and colour. Repeating
+    # it inside every segment wastes space and is the main source of collisions.
+    return core, size_label
+
+
+def read_panel_b_gene_annotations(
+    gtf_path: Path | None = PANEL_B_GTF,
+) -> list[dict[str, Any]]:
+    """Read the curated Panel B gene set from a plain or gzipped GTF."""
+    if gtf_path is None or not Path(gtf_path).exists():
+        return []
+
+    path = Path(gtf_path)
+    opener = gzip.open if path.suffix == ".gz" else open
+    wanted = set(PANEL_B_GENE_NAMES)
+    genes: dict[str, dict[str, Any]] = {}
+    with opener(path, "rt") as handle:
+        for line in handle:
+            if not line or line.startswith("#"):
+                continue
+            fields = line.rstrip("\n").split("\t")
+            if len(fields) < 9 or fields[0] != CHROM or fields[2] != "gene":
+                continue
+            start = int(fields[3])
+            end = int(fields[4])
+            if end < CN_PLOT_START or start > CN_PLOT_END:
+                continue
+            match = re.search(r'(?:^|;\s*)gene "([^"]+)"', fields[8])
+            if match is None or match.group(1) not in wanted:
+                continue
+            name = match.group(1)
+            genes[name] = {
+                "name": name,
+                "start": start,
+                "end": end,
+                "strand": fields[6],
+            }
+
+    return [genes[name] for name in PANEL_B_GENE_NAMES if name in genes]
+
+
+def draw_panel_b_gene_track(
+    ax: plt.Axes,
+    gtf_path: Path | None = PANEL_B_GTF,
+) -> None:
+    """Draw a compact directional gene track and the exact PWS/AS ICR."""
+    genes = read_panel_b_gene_annotations(gtf_path)
+    ax.set_xlim(CN_PLOT_START / 1e6, CN_PLOT_END / 1e6)
+    ax.set_ylim(-0.15, 4.15)
+    ax.set_yticks([])
+    ax.tick_params(axis="x", bottom=False, labelbottom=False)
+    ax.set_title(
+        "B. Chr15 dosage confirms recurrent deletion classes and sizes",
+        loc="left", fontsize=fs(11), fontweight="bold", pad=8,
+    )
+
+    # Greedy lane allocation separates neighbouring and overlapping labels.
+    lane_ends = [float("-inf")] * 4
+    for gene in sorted(genes, key=lambda item: (item["start"], item["end"])):
+        start = gene["start"] / 1e6
+        end = gene["end"] / 1e6
+        midpoint = (start + end) / 2.0
+        label_width = max(0.22, 0.075 * len(gene["name"]))
+        occupied_start = min(start, midpoint - label_width / 2.0)
+        occupied_end = max(end, midpoint + label_width / 2.0)
+        eligible = [i for i, lane_end in enumerate(lane_ends) if occupied_start > lane_end]
+        lane = eligible[0] if eligible else int(np.argmin(lane_ends))
+        lane_ends[lane] = occupied_end
+        y = 0.42 + lane * 0.88
+        arrow_start, arrow_end = (start, end) if gene["strand"] == "+" else (end, start)
+        ax.annotate(
+            "", xy=(arrow_end, y), xytext=(arrow_start, y),
+            arrowprops={"arrowstyle": "-|>", "lw": 0.75, "color": "#4D4D4D", "mutation_scale": 5},
+        )
+        ax.text(
+            midpoint, y + 0.16, gene["name"],
+            ha="center", va="bottom", fontsize=fs(5.2),
+            color="#333333", fontstyle="italic",
+        )
+
+    icr_mid = (PWS_IC_START + PWS_IC_END) / 2.0 / 1e6
+    ax.axvline(icr_mid, color="#CC79A7", lw=1.5, zorder=5)
+    ax.annotate(
+        f"PWS/AS ICR\n{PWS_IC_START / 1e6:.3f}–{PWS_IC_END / 1e6:.3f} Mb",
+        xy=(icr_mid, 0.12), xytext=(icr_mid + 0.72, 3.88),
+        ha="left", va="top", fontsize=fs(5.6), fontweight="bold",
+        color="#A64C91",
+        arrowprops={"arrowstyle": "-", "lw": 0.7, "color": "#CC79A7"},
+    )
+
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+
+def draw_cohort_cnv_track(
+    ax: plt.Axes,
+    structural_by_sample: dict[str, dict[str, Any]],
+    show_legend: bool = True,
+    show_title: bool = True,
+) -> None:
+    """Main Figure 1B: compact cohort-wide chr15 CNV/deletion track."""
+    cohort = sorted_cohort()
+    labels = sample_display_labels()
+    y = np.arange(len(cohort), dtype=float)
+
+    ax.set_xlim(CN_PLOT_START / 1e6, CN_PLOT_END / 1e6)
+    ax.set_ylim(len(cohort) - 0.55, -0.55)
+    ax.set_yticks(y)
+    ax.set_yticklabels([labels[sid] for sid, _c, _m in cohort], fontsize=fs(7.0))
+    ax.tick_params(axis="y", length=0)
+    ax.set_xlabel("T2T-CHM13v2.0 chr15 coordinate (Mb)", fontsize=fs(8.5))
+    if show_title:
+        ax.set_title(
+            "B. Chr15 dosage confirms recurrent deletion classes and sizes",
+            loc="left", fontsize=fs(11), fontweight="bold", pad=8,
+        )
+
+    for i, (sample_id, _clinical, mechanism) in enumerate(cohort):
+        color = MECHANISM_COLORS[mechanism]
+        ax.hlines(
+            i, CN_PLOT_START / 1e6, CN_PLOT_END / 1e6,
+            color="#D8D8D8", lw=2.6, zorder=1
+        )
+        ax.get_yticklabels()[i].set_color(color)
+        ax.get_yticklabels()[i].set_fontweight("bold")
+
+        s = structural_by_sample.get(sample_id, {})
+        event_start = safe_float(s.get("cn_event_start"))
+        event_end = safe_float(s.get("cn_event_end"))
+        event_cn = safe_float(s.get("cn_event_mean_cn"))
+
+        if event_start is not None and event_end is not None and event_end > event_start:
+            left = event_start / 1e6
+            width = (event_end - event_start) / 1e6
+            right = left + width
+
+            ax.add_patch(
+                Rectangle(
+                    (left, i - 0.22), width, 0.44,
+                    facecolor=color, edgecolor=color,
+                    linewidth=0.5, alpha=0.74, zorder=3
+                )
+            )
+
+            class_label, size_label = _compact_deletion_display(s)
+            cn_label = f" · CN {event_cn:.1f}" if event_cn is not None else ""
+            if width >= 1.4:
+                ax.text(
+                    left + width / 2, i, f"{class_label} · {size_label}{cn_label}",
+                    ha="center", va="center", fontsize=fs(4.9),
+                    color="white", fontweight="bold", zorder=4
+                )
+            else:
+                text_x = min(right + 0.10, CN_PLOT_END / 1e6 - 0.02)
+                ax.text(
+                    text_x, i - 0.08, class_label,
+                    ha="left", va="center", fontsize=fs(5.2),
+                    color=color, fontweight="bold", zorder=4,
+                )
+                ax.text(
+                    text_x, i + 0.10, f"{size_label}{cn_label}",
+                    ha="left", va="center", fontsize=fs(5.0),
+                    color="#444444", zorder=4,
+                )
+
+        elif mechanism in {"PWS-DEL", "AS-DEL"}:
+            ax.add_patch(
+                Rectangle(
+                    (CN_PLOT_START / 1e6, i - 0.20),
+                    (CN_PLOT_END - CN_PLOT_START) / 1e6,
+                    0.40, facecolor="none", edgecolor=color,
+                    hatch="xx", linewidth=0.8, alpha=0.65, zorder=2
+                )
+            )
+            ax.text(
+                CN_PLOT_END / 1e6 - 0.08, i, "structural unresolved",
+                ha="right", va="center", fontsize=fs(5.3), color=color
+            )
+        else:
+            ax.hlines(
+                i, CN_PLOT_START / 1e6, CN_PLOT_END / 1e6,
+                color=color, lw=1.15, alpha=0.78, zorder=2
+            )
+
+    for name, pos in BREAKPOINT_LANDMARKS.items():
+        ax.axvline(pos / 1e6, color="#B5B5B5", lw=0.6, ls="--", zorder=0)
+        ax.text(
+            pos / 1e6, -0.43, name,
+            ha="center", va="bottom", rotation=90,
+            fontsize=fs(5.1), color="#777777"
+        )
+
+    ax.axvspan(
+        PWS_IC_START / 1e6, PWS_IC_END / 1e6,
+        color="#CC79A7", alpha=0.18, linewidth=0, zorder=0
+    )
+    ax.axvline(
+        (PWS_IC_START + PWS_IC_END) / 2.0 / 1e6,
+        color="#CC79A7", lw=1.0, alpha=0.85, zorder=2,
+    )
+
+    for i in range(len(cohort) - 1):
+        if cohort[i][2] != cohort[i + 1][2]:
+            ax.axhline(i + 0.5, color="#555555", lw=0.55)
+
+    ax.grid(axis="x", color="#EFEFEF", lw=0.55)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+    handles = [
+        Line2D([0], [0], color=MECHANISM_COLORS[m], lw=3, label=m)
+        for m in sorted(MECHANISM_ORDER, key=MECHANISM_ORDER.get)
+    ]
+    if show_legend:
+        ax.legend(
+            handles=handles,
+            frameon=False, ncol=3, fontsize=fs(6.0),
+            loc="upper center", bbox_to_anchor=(0.5, -0.16),
+            handlelength=2.0, columnspacing=1.1, borderaxespad=0.0,
+        )
+
+def _state_color_from_pattern(pattern: str, fallback: str = "#666666") -> str:
+    if pattern == "maternal-pattern":
+        return STATE_COLORS["M"]
+    if pattern == "paternal-pattern":
+        return STATE_COLORS["P"]
+    if pattern == "uncertain":
+        return "#B68B00"
+    if pattern == "low-support":
+        return "#8C8C8C"
+    return fallback
+
+
+def _plot_bed_cpg_track(
+    ax: plt.Axes,
+    stats: BedStats,
+    label: str,
+    color: str,
+    x_midpoint: float,
+    marker: str = "o",
+    linestyle: str = "-",
+) -> None:
+    values = stats.values_by_pos or {}
+    if not values:
+        return
+    ordered = sorted(values.items())
+    x = np.asarray([(p - x_midpoint) / 1000.0 for p, _ in ordered], dtype=float)
+    y = np.asarray([v[0] for _p, v in ordered], dtype=float)
+    ax.plot(
+        x, y, marker=marker, ms=2.6, lw=0.8,
+        linestyle=linestyle, color=color, alpha=0.9,
+        label=label, zorder=3
+    )
+
+
+def render_supplementary_methylation_tracks(
+    sample_files: dict[str, dict[str, Path | None]],
+    matrix_rows: list[dict[str, Any]],
+    outdir: Path,
+) -> None:
+    """Supplementary Figure S1: per-sample CpG methylation tracks around the IC.
+
+    Unlike the main heatmap, these tracks expose the underlying CpG-to-CpG
+    measurements for every participant. Deletion genomes use combined methylation
+    because the interval is hemizygous; diploid/mUPD/disease-control genomes use
+    hap1 and hap2 tracks. HP1/HP2 remain numerical phase labels; M-like/P-like
+    colors reflect the control-calibrated methylation pattern rather than trio
+    parent-of-origin assignment.
+    """
+    labels = sample_display_labels()
+    row_map: dict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
+    for row in matrix_rows:
+        row_map[row["sample_id"]][row["haplotype_or_source"]] = row
+
+    cohort = sorted_cohort()
+    ncol = 2
+    nrow = math.ceil(len(cohort) / ncol)
+    fig, axes = plt.subplots(
+        nrow, ncol,
+        figsize=(14.5, max(12.0, 2.05 * nrow)),
+        sharex=True, sharey=True, squeeze=False
+    )
+    for ax in axes.flat:
+        ax.axis("off")
+
+    midpoint = (PWS_IC_START + PWS_IC_END) / 2.0
+    display_start = MODBAM_REGION_START
+    display_end = MODBAM_REGION_END
+    x_left = (display_start - midpoint) / 1000.0
+    x_right = (display_end - midpoint) / 1000.0
+
+    # Collect source rows for transparent supplementary source data.
+    source_rows: list[dict[str, Any]] = []
+
+    for ax, (sample_id, _clinical, mechanism) in zip(axes.flat, cohort):
+        ax.axis("on")
+        ax.set_xlim(x_left, x_right)
+        ax.set_ylim(-0.03, 1.03)
+        ax.axvspan(
+            (PWS_IC_START - midpoint) / 1000.0,
+            (PWS_IC_END - midpoint) / 1000.0,
+            color="#F3E8F1", alpha=0.45, lw=0, zorder=0
+        )
+        ax.grid(axis="y", color="#EFEFEF", lw=0.5)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+
+        rows = row_map.get(sample_id, {})
+        files = sample_files[sample_id]
+
+        if mechanism in {"PWS-DEL", "AS-DEL"}:
+            stats = read_bed_region(
+                files.get("combined_bed"),
+                display_start, display_end, keep_values=True
+            )
+            row = rows.get("combined_fallback", {})
+            pattern = row.get("pattern", "")
+            fallback = MECHANISM_COLORS[mechanism]
+            color = _state_color_from_pattern(pattern, fallback)
+            _plot_bed_cpg_track(
+                ax, stats, "combined retained chromosome",
+                color, midpoint, marker="o", linestyle="-"
+            )
+            for pos, (beta, cov) in (stats.values_by_pos or {}).items():
+                source_rows.append({
+                    "sample_id": sample_id,
+                    "display_label": labels[sample_id],
+                    "molecular_mechanism": mechanism,
+                    "track": "combined",
+                    "position_0based": pos,
+                    "position_relative_to_IC_midpoint_kb": (pos - midpoint) / 1000.0,
+                    "methylation_beta": beta,
+                    "coverage": cov,
+                    "pattern": pattern,
+                })
+        else:
+            for hap, marker, ls in [
+                ("hap1", "o", "-"),
+                ("hap2", "s", "--"),
+            ]:
+                stats = read_bed_region(
+                    files.get(f"{hap}_bed"),
+                    display_start, display_end, keep_values=True
+                )
+                row = rows.get(hap, {})
+                pattern = row.get("pattern", "")
+                color = _state_color_from_pattern(
+                    pattern, "#4D4D4D" if hap == "hap1" else "#8A8A8A"
+                )
+                short = row.get("pattern_short", "?")
+                _plot_bed_cpg_track(
+                    ax, stats, f"{hap.upper()} ({short})",
+                    color, midpoint, marker=marker, linestyle=ls
+                )
+                for pos, (beta, cov) in (stats.values_by_pos or {}).items():
+                    source_rows.append({
+                        "sample_id": sample_id,
+                        "display_label": labels[sample_id],
+                        "molecular_mechanism": mechanism,
+                        "track": hap,
+                        "position_0based": pos,
+                        "position_relative_to_IC_midpoint_kb": (pos - midpoint) / 1000.0,
+                        "methylation_beta": beta,
+                        "coverage": cov,
+                        "pattern": pattern,
+                    })
+
+        ax.set_title(
+            f"{labels[sample_id]} | {mechanism}",
+            loc="left", fontsize=fs(7.2), fontweight="bold",
+            color=MECHANISM_COLORS[mechanism], pad=3
+        )
+        ax.legend(
+            frameon=False, fontsize=fs(5.3),
+            loc="upper right", handlelength=1.8
+        )
+
+    # Shared labels.
+    for ax in axes[-1, :]:
+        if ax.axison:
+            ax.set_xlabel("Position relative to IC midpoint (kb)", fontsize=fs(7.2))
+    for row_axes in axes:
+        if row_axes[0].axison:
+            row_axes[0].set_ylabel("Methylation β", fontsize=fs(7.2))
+
+    fig.suptitle(
+        "Supplementary Figure S1 | Per-sample CpG methylation tracks across the PWS/AS imprinting centre",
+        fontsize=fs(12), fontweight="bold", y=0.997
+    )
+    fig.text(
+        0.5, 0.006,
+        "Deletion genomes: combined retained-chromosome methylation. "
+        "Diploid/mUPD genomes: numerical HP1/HP2 tracks; M-like/P-like colors are control-calibrated methylation states.",
+        ha="center", va="bottom", fontsize=fs(6.1), color="#666666"
+    )
+    fig.tight_layout(rect=[0.02, 0.025, 0.99, 0.985])
+
+    base = outdir / "supplementary" / "Supplementary_FigureS1_per_sample_methylation_tracks"
+    fig.savefig(base.with_suffix(".pdf"), bbox_inches="tight")
+    fig.savefig(base.with_suffix(".png"), dpi=PUBLICATION_DPI, bbox_inches="tight")
+    fig.savefig(base.with_suffix(".svg"), bbox_inches="tight")
+    plt.close(fig)
+
+    write_tsv(
+        outdir / "source_data" / "Supplementary_FigureS1_per_sample_methylation_tracks_source_data.tsv",
+        source_rows,
+    )
+
+
+def render_supplementary_sequencing_qc(
+    support_rows: list[dict[str, Any]],
+    outdir: Path,
+) -> None:
+    """Supplementary Figure S2: sequencing depth / haplotype-resolution QC."""
+    fig = plt.figure(figsize=(16.0, 8.7))
+    grid = GridSpec(
+        2, 4, figure=fig,
+        height_ratios=[0.10, 1.0],
+        width_ratios=[1.0, 1.15, 1.05, 1.0],
+        hspace=0.04, wspace=0.30,
+    )
+    header = fig.add_subplot(grid[0, :])
+    header.axis("off")
+    header.text(
+        0.0, 0.72,
+        "Supplementary Figure S2 | Sequencing depth and haplotype-resolution QC at the PWS/AS IC",
+        ha="left", va="center", fontsize=fs(11.5), fontweight="bold"
+    )
+    axes = [fig.add_subplot(grid[1, i]) for i in range(4)]
+    draw_sequencing_support_panel(
+        axes, support_rows,
+        panel_labels=("S2a", "S2b", "S2c", "S2d")
+    )
+    fig.text(
+        0.5, 0.015,
+        "Depth is interpreted as measurement support, not biological weight. "
+        "Hemizygous PWS/AS deletion intervals are not expected to show balanced HP1/HP2 depth.",
+        ha="center", va="bottom", fontsize=fs(6.2), color="#666666"
+    )
+    fig.subplots_adjust(top=0.96, bottom=0.09, left=0.07, right=0.985)
+    base = outdir / "supplementary" / "Supplementary_FigureS2_sequencing_QC"
+    fig.savefig(base.with_suffix(".pdf"), bbox_inches="tight")
+    fig.savefig(base.with_suffix(".png"), dpi=PUBLICATION_DPI, bbox_inches="tight")
+    fig.savefig(base.with_suffix(".svg"), bbox_inches="tight")
+    plt.close(fig)
+
 def _save_figure_formats(
     fig: plt.Figure,
     out_prefix: Path,
@@ -3941,9 +5045,12 @@ def _save_figure_formats(
     canonical_paths: list[Path] = []
     for suffix in (".png", ".pdf", ".svg"):
         output_path = out_prefix.with_suffix(suffix)
-        kwargs: dict[str, Any] = {"bbox_inches": "tight"}
+        kwargs: dict[str, Any] = {
+            "bbox_inches": "tight",
+            "facecolor": "white",
+        }
         if suffix == ".png":
-            kwargs["dpi"] = 300
+            kwargs["dpi"] = PUBLICATION_DPI
         fig.savefig(output_path, **kwargs)
         canonical_paths.append(output_path)
 
@@ -3958,124 +5065,205 @@ def _save_figure_formats(
 
 def create_main_figure(
     out_prefix: Path,
-    panel_a_rows: list[dict[str, Any]],
-    modbam_panels: dict[str, dict[str, Any]],
-    modbam_region: str,
-    support_rows: list[dict[str, Any]],
+    panel_rows: list[dict[str, Any]],
+    mechanistic_rows: list[dict[str, Any]],
+    structural_by_sample: dict[str, dict[str, Any]],
+    deletion_profile_rows: list[dict[str, Any]],
     inference_rows: list[dict[str, Any]] | None = None,
     parental_reference: ParentalReferenceModel | None = None,
+    modbam_panels: dict[str, dict[str, Any]] | None = None,
 ) -> None:
-    """
-    Main publication Figure 1.
+    """Main publication Figure 1.
 
-    A = enlarged raw ModBAMtools single-molecule evidence
-    B = quantitative complete-cohort IC methylation
-    C = sequencing depth and haplotype support
-
-    The conceptual molecular-design panel is omitted because the reciprocal
-    configurations are already explicit in the raw and cohort-level data.
+    A = complete-cohort heatmap plus one representative ModBAM profile per block
+    B = cohort-wide chromosome-15 copy-number/deletion track
+    C = deletion-span methylation profile classification against empirical
+        maternal-like and paternal-like control profiles
     """
     plt.rcParams.update(
         {
             "font.family": "sans-serif",
             "font.sans-serif": ["Arial", "Helvetica", "Liberation Sans", "DejaVu Sans"],
-            "font.size": fs(10),
+            "font.size": fs(9),
             "axes.linewidth": 0.8,
             "pdf.fonttype": 42,
             "ps.fonttype": 42,
+            "savefig.dpi": PUBLICATION_DPI,
+            "savefig.facecolor": "white",
         }
     )
 
-    fig = plt.figure(figsize=(19.5, 14.2), constrained_layout=False)
+    fig = plt.figure(figsize=(19.0, 18.2), constrained_layout=False)
     outer = GridSpec(
-        2,
-        1,
-        figure=fig,
-        height_ratios=[1.35, 0.95],
-        hspace=0.27,
+        3, 1, figure=fig,
+        height_ratios=[1.85, 1.0, 0.16],
+        hspace=0.25,
     )
 
-    # The raw single-molecule evidence is the dominant, full-width panel.
-    draw_single_molecule_panel(
-        fig=fig,
-        spec=outer[0],
-        panels=modbam_panels,
-        region=modbam_region,
-        panel_label="a",
+    panel_a = outer[0].subgridspec(
+        3, 2,
+        height_ratios=[0.08, 1.0, 0.14],
+        width_ratios=[0.46, 0.54],
+        hspace=0.05,
+        wspace=0.09,
     )
 
-    # Bottom row: cohort result followed by continuous technical support.
-    bottom = outer[1].subgridspec(
-        1,
-        2,
-        width_ratios=[0.40, 0.60],
-        wspace=0.18,
+    ax_a_header = fig.add_subplot(panel_a[0, :])
+    ax_a_header.axis("off")
+    ax_a_header.text(
+        0.0, 0.62,
+        "A. IC methylation states and representative single-molecule profiles",
+        ha="left", va="center", fontsize=fs(11), fontweight="bold",
     )
 
-    panel_c_grid = bottom[0, 0].subgridspec(
-        1,
-        2,
-        width_ratios=[0.43, 1.0],
-        wspace=0.04,
+    heat_grid = panel_a[1, 0].subgridspec(
+        1, 2, width_ratios=[0.34, 1.0], wspace=0.05
     )
-    ax_c_note = fig.add_subplot(panel_c_grid[0, 0])
-    ax_c_heat = fig.add_subplot(panel_c_grid[0, 1])
+    ax_a_note = fig.add_subplot(heat_grid[0, 0])
+    ax_a_heat = fig.add_subplot(heat_grid[0, 1])
+    caption_grid = panel_a[2, :].subgridspec(
+        1, 2, width_ratios=[0.46, 0.54], wspace=0.09
+    )
+    left_footer = caption_grid[0, 0].subgridspec(
+        2, 1, height_ratios=[0.68, 0.32], hspace=0.12
+    )
+    ax_a_caption = fig.add_subplot(left_footer[0, 0])
+    ax_a_cbar = fig.add_subplot(left_footer[1, 0])
+    ax_modbam_caption = fig.add_subplot(caption_grid[0, 1])
+    ax_modbam_caption.axis("off")
     draw_cohort_methylation_panel(
-        ax_c_note,
-        ax_c_heat,
-        panel_a_rows,
+        ax_a_note,
+        ax_a_heat,
+        panel_rows,
         inference_rows,
         parental_reference,
-        panel_label="b",
+        panel_label="A",
+        cbar_ax=ax_a_cbar,
+        cbar_orientation="horizontal",
+        caption_ax=ax_a_caption,
     )
-
-    support_grid = bottom[0, 1].subgridspec(
-        2,
-        4,
-        height_ratios=[0.08, 1.0],
-        width_ratios=[1.0, 1.15, 1.05, 1.0],
-        hspace=0.05,
-        wspace=0.28,
-    )
-    support_header = fig.add_subplot(support_grid[0, :])
-    support_header.axis("off")
-    support_header.text(
-        0.0,
-        0.72,
-        "c. Sequencing depth and haplotype support at the PWS/AS IC",
-        ha="left",
-        va="center",
-        fontsize=fs(11),
-        fontweight="bold",
-    )
-    support_axes = [fig.add_subplot(support_grid[1, i]) for i in range(4)]
-    draw_sequencing_support_panel(
-        support_axes,
-        support_rows,
-        panel_labels=("c1", "c2", "c3", "c4"),
-    )
-
-    fig.text(
-        0.70,
-        0.030,
+    if modbam_panels:
+        draw_single_molecule_panel(
+            fig, panel_a[1, 1], modbam_panels, MODBAM_PLOT_REGION, panel_rows,
+            connector_ax=ax_a_heat,
+            panel_label="A",
+        )
+    else:
+        # A clear placeholder is preferable to silently dropping half of Panel A
+        # in render-only workflows with incomplete cached ModBAM provenance.
+        missing_ax = fig.add_subplot(panel_a[1, 1])
+        missing_ax.axis("off")
+        missing_ax.text(
+            0.5, 0.5,
+            "Representative ModBAM panels unavailable",
+            ha="center", va="center", fontsize=fs(8), color="#777777",
+        )
+    ax_modbam_caption.text(
+        0.0, 0.72,
         (
-            "Support is shown continuously; lower per-haplotype depth is not "
-            "a sample failure when the parental-state estimate remains estimable."
+            f"One representative per cohort block; IC depth closest to the within-group median. "
+            f"Direct MM/ML rendering, MAPQ ≥ {MODBAM_MIN_MAPQ}; {MODBAM_PLOT_REGION}."
         ),
-        ha="center",
-        va="bottom",
-        fontsize=fs(5.8),
-        color="#666666",
+        ha="left", va="top", fontsize=fs(5.5), color="#555555",
+        wrap=True,
+    )
+
+    bottom = outer[1].subgridspec(
+        1, 2, width_ratios=[0.52, 0.48], wspace=0.16
+    )
+
+    panel_b = bottom[0, 0].subgridspec(
+        2, 1, height_ratios=[0.24, 1.0], hspace=0.025
+    )
+    ax_b_genes = fig.add_subplot(panel_b[0, 0])
+    draw_panel_b_gene_track(ax_b_genes)
+    ax_b = fig.add_subplot(panel_b[1, 0], sharex=ax_b_genes)
+    draw_cohort_cnv_track(
+        ax_b, structural_by_sample, show_legend=False, show_title=False
+    )
+
+    ax_c = fig.add_subplot(bottom[0, 1])
+    draw_panel_c(
+        ax_c,
+        deletion_profile_rows,
+    )
+
+    # B and C encode the same molecular mechanisms. A single dedicated legend
+    # band keeps both plotting areas unobstructed and preserves panel widths.
+    legend_ax = fig.add_subplot(outer[2])
+    legend_ax.axis("off")
+    legend_handles = [
+        Line2D(
+            [0], [0],
+            color=MECHANISM_COLORS[m], lw=2.2,
+            marker=MECHANISM_MARKERS[m], markersize=6.5,
+            markerfacecolor=MECHANISM_COLORS[m], markeredgecolor="white",
+            label=m,
+        )
+        for m in sorted(MECHANISM_ORDER, key=MECHANISM_ORDER.get)
+    ]
+    mechanism_legend = legend_ax.legend(
+        handles=legend_handles,
+        title="Cohort / mechanism",
+        frameon=False,
+        loc="upper left",
+        bbox_to_anchor=(0.05, 1.0),
+        ncol=len(legend_handles),
+        fontsize=fs(7.2),
+        title_fontsize=fs(7.4),
+        handlelength=2.2,
+        columnspacing=1.6,
+    )
+    legend_ax.add_artist(mechanism_legend)
+    template_handles = [
+        Line2D(
+            [0], [0], marker="o", linestyle="none", markersize=5.5,
+            markerfacecolor=STATE_COLORS["M"], markeredgecolor="#222222",
+            label="M-like profile",
+        ),
+        Line2D([0], [0], marker="o", linestyle="none", markersize=5.5,
+               markerfacecolor=STATE_COLORS["P"], markeredgecolor="#222222",
+               label="P-like profile"),
+        Line2D([0], [0], marker="o", linestyle="none", markersize=5.5,
+               markerfacecolor=STATE_COLORS["?"], markeredgecolor="#222222",
+               label="Uncertain profile"),
+    ]
+    legend_ax.legend(
+        handles=template_handles,
+        title="Panel C classification",
+        frameon=False,
+        loc="upper right",
+        bbox_to_anchor=(0.98, 1.0),
+        ncol=3,
+        fontsize=fs(6.8),
+        title_fontsize=fs(7.0),
+        columnspacing=1.0,
+    )
+    legend_ax.text(
+        0.5, 0.02,
+        "Panel C score = (RMSE to P − RMSE to M) / (RMSE to P + RMSE to M); positive is maternal-like, negative is paternal-like; | score | < 0.05 is uncertain.",
+        ha="center", va="bottom", fontsize=fs(5.7), color="#666666",
     )
 
     fig.subplots_adjust(
-        top=0.965,
-        bottom=0.075,
-        left=0.040,
-        right=0.985,
+        top=0.985,
+        bottom=0.035,
+        left=0.060,
+        right=0.975,
     )
 
-    _save_figure_formats(fig, out_prefix, aliases=("Figure1", "Figure1_improved"))
+    # Earlier versions emitted byte-identical aliases. Remove only those exact
+    # legacy stems so the figures directory contains one canonical Figure 1.
+    for legacy_stem in ("Figure1_mechanistic", "Figure1_natural_experiment"):
+        for suffix in (".png", ".pdf", ".svg"):
+            legacy_path = out_prefix.parent / f"{legacy_stem}{suffix}"
+            if legacy_path.exists():
+                legacy_path.unlink()
+
+    _save_figure_formats(
+        fig,
+        out_prefix,
+    )
     plt.close(fig)
 
 # ---------------------------------------------------------------------------
@@ -4273,6 +5461,7 @@ def write_report(
     preflight_rows: list[dict[str, Any]] | None = None,
     parental_reference: ParentalReferenceModel | None = None,
     parental_reference_rows: list[dict[str, Any]] | None = None,
+    deletion_profile_rows: list[dict[str, Any]] | None = None,
     outdir: Path | None = None,
 ) -> None:
     """Write an extensive, figure-linked scientific results report.
@@ -4302,6 +5491,7 @@ def write_report(
     inference_rows = inference_rows or []
     threshold_rows = threshold_rows or []
     parental_reference_rows = parental_reference_rows or []
+    deletion_profile_rows = deletion_profile_rows or []
 
     lines: list[str] = [
         "# Extensive Figure 1 results report",
@@ -4341,6 +5531,34 @@ def write_report(
             "Primary M/P calls use these empirical references and descriptive "
             "uncertainty, not fixed 0.85/0.15 thresholds."
         )
+    retained_profile_rows = [
+        row for row in deletion_profile_rows
+        if row.get("track_role") == "retained deletion chromosome"
+    ]
+    if retained_profile_rows:
+        called = [
+            row for row in retained_profile_rows
+            if row.get("profile_parental_class") in {"maternal-like", "paternal-like"}
+        ]
+        matching = [
+            row for row in called
+            if str(row.get("profile_matches_expected", "")).lower() == "true"
+        ]
+        uncertain = [
+            row.get("display_label", row.get("sample_id", ""))
+            for row in retained_profile_rows
+            if row.get("profile_parental_class") == "uncertain"
+        ]
+        lines.append(
+            "- **Deletion-span profile classifier:** "
+            f"{len(called)}/{len(retained_profile_rows)} retained tracks received "
+            f"a profile-level M/P call and {len(matching)}/{len(called)} called "
+            "tracks matched the syndrome-expected parental state. "
+            + (
+                "Uncertain profiles: " + ", ".join(map(str, uncertain)) + "."
+                if uncertain else "No retained profile fell in the uncertainty zone."
+            )
+        )
 
     # Main Figure.
     lines += [
@@ -4350,13 +5568,14 @@ def write_report(
     ]
     lines += _report_image(
         report_path,
-        outdir / "figures" / "Figure1_mechanistic.png",
+        outdir / "figures" / "Figure1.png",
         "Main Figure 1",
         (
-            "Main Figure 1 integrates enlarged single-molecule ModBAM evidence, "
-            "complete-cohort IC methylation and continuous sequencing/phasing "
-            "support. Lower per-haplotype depth is not treated as sample failure "
-            "when the methylation state remains estimable."
+            "Main Figure 1 integrates the complete-cohort IC methylation heatmap "
+            "with compact, depth-matched representative ModBAM profiles, cohort-wide "
+            "chr15 dosage and the deletion-span parental-profile classifier. Lower "
+            "per-haplotype depth is not treated as sample failure when the "
+            "methylation state remains estimable."
         ),
     )
 
@@ -4589,6 +5808,104 @@ def write_report(
         ],
     )
 
+    deletion_rows = [
+        row for row in deletion_profile_rows
+        if row.get("track_role") == "retained deletion chromosome"
+    ]
+    validation_rows = [
+        row for row in deletion_profile_rows
+        if row.get("track_role") in {"reference", "held-out disease control"}
+    ]
+    lines += [
+        "",
+        "### Deletion-span parental-profile classification (Panel C)",
+        "",
+        "Panel C asks whether the methylation track retained inside each "
+        "participant-specific CN deletion resembles a maternal or paternal "
+        "chromosome. Unaffected-control haplotypes are first anchored as M-like "
+        "or P-like by their IC state. At each deletion span, a CpG enters the "
+        "profile classifier only when it is observed in all four control "
+        "haplotypes, the M-like and P-like control medians differ by at least "
+        f"{DELETION_PROFILE_MIN_REFERENCE_DELTA:.2f} beta, and the within-state "
+        f"range is no greater than {DELETION_PROFILE_MAX_WITHIN_STATE_RANGE:.2f}. "
+        "The retained profile is compared with the two position-matched reference "
+        "profiles by RMSE. The plotted score is `(RMSE_P - RMSE_M) / "
+        "(RMSE_P + RMSE_M)`: positive values are M-like and negative values are "
+        f"P-like; absolute scores below {DELETION_PROFILE_MIN_SCORE_MAGNITUDE:.2f} "
+        "are called uncertain. DiGeorge haplotypes are held out from training and "
+        "retained in the source table as supplementary validation; Panel C itself "
+        "shows only the unaffected-control chromosomes and deletion-sample tracks.",
+        "",
+        "#### Retained chromosome within each sample-specific deletion",
+        "",
+    ]
+    lines += _md_table(
+        [
+            "Sample", "Group", "Deletion (Mb)", "Interval", "Informative CpGs",
+            "RMSE M", "RMSE P", "Profile score", "Profile class", "IC class",
+            "Expected", "Integrated interpretation",
+        ],
+        [
+            [
+                row.get("display_label", ""),
+                row.get("molecular_mechanism", ""),
+                row.get("deletion_size_mb", ""),
+                f"{row.get('evaluation_start', '')}-{row.get('evaluation_end', '')}",
+                row.get("n_shared_informative_CpGs", ""),
+                row.get("rmse_to_maternal_profile", ""),
+                row.get("rmse_to_paternal_profile", ""),
+                row.get("parental_profile_score", ""),
+                row.get("profile_parental_class", ""),
+                row.get("IC_parental_class", ""),
+                row.get("expected_parental_class", ""),
+                row.get("integrated_classification", ""),
+            ]
+            for row in deletion_rows
+        ],
+    )
+    lines += [
+        "",
+        "#### Separated control and DiGeorge haplotype validation",
+        "",
+    ]
+    lines += _md_table(
+        [
+            "Sample", "Group", "Haplotype", "Informative CpGs",
+            "Profile score", "Profile class", "IC class", "Concordance",
+        ],
+        [
+            [
+                row.get("display_label", ""),
+                row.get("molecular_mechanism", ""),
+                row.get("haplotype_label", ""),
+                row.get("n_shared_informative_CpGs", ""),
+                row.get("parental_profile_score", ""),
+                row.get("profile_parental_class", ""),
+                row.get("IC_parental_class", ""),
+                row.get("integrated_classification", ""),
+            ]
+            for row in validation_rows
+        ],
+    )
+    lines += [
+        "",
+        "The deletion-span result is a profile-similarity classification, not "
+        "proof of biological parent of origin. It is internally calibrated from "
+        "two unaffected controls, and long-range HP labels can be affected by "
+        "phase-block boundaries. The IC call is therefore reported independently "
+        "and disagreements are retained rather than forced into an M/P category.",
+        "",
+        "The control chromosomes lie close to scores of -1 and +1 because those "
+        "same control tracks train the position-matched parental profiles. This "
+        "is an in-sample reference property, not evidence that independent tracks "
+        "should also reach the endpoints. Deletion-sample scores move toward zero "
+        "when both RMSE values are substantial or similar, as can occur from "
+        "inter-individual methylation variation, incomplete CpG overlap and "
+        "long-range phase-block switching. A point can therefore be correctly "
+        "closer to one parental profile while remaining far from its control "
+        "centroid; its IC classification is reported separately.",
+    ]
+
     lines += [
         "",
         "### Group-level state concordance",
@@ -4784,7 +6101,7 @@ def write_report(
         "",
         "## 9. Raw single-molecule methylation evidence",
         "",
-        f"All main-panel ModBAMtools visualizations use {MODBAM_PLOT_REGION}, "
+        f"All main-panel ModBAM visualizations use {MODBAM_PLOT_REGION}, "
         f"primary alignments and MAPQ ≥ {MODBAM_MIN_MAPQ}. Representative "
         "selection is prespecified as the sample whose total IC depth is closest "
         "to the within-group median, reducing the risk of visual cherry-picking.",
@@ -4834,7 +6151,7 @@ def write_report(
     if individual_modbam_pngs:
         lines += [
             "",
-            "### Extended Data: individual ModBAMtools profiles",
+            "### Extended Data: individual ModBAM profiles",
             "",
             "Individual raw-molecule panels are embedded below to permit "
             "sample-level inspection without relying only on the cohort contact "
@@ -4848,7 +6165,7 @@ def write_report(
                 image,
                 image.stem,
                 (
-                    "Single-participant ModBAMtools profile generated with the "
+                    "Single-participant ModBAM profile generated with the "
                     f"standardized {MODBAM_PLOT_REGION} window and MAPQ ≥ "
                     f"{MODBAM_MIN_MAPQ} filtering."
                 ),
@@ -4961,12 +6278,14 @@ def write_report(
         "- `../tables/Figure1A_modbamtools_representatives.tsv` — representative raw single-molecule panels.",
         "- `../tables/Figure1B_allele_methylation_matrix.tsv` — plotted cohort methylation values and states.",
         "- `../tables/Figure1B_sample_level_inference.tsv` — participant-level PWS-DEL versus AS-DEL inference.",
+        "- `../tables/Figure1C_deletion_span_parental_profile.tsv` — sample-specific deletion-span RMSE classification and separated control/DiGeorge haplotype validation.",
         "- `../tables/Figure1C_coverage_phasing_support.tsv` — depth, HP depth, CpG support and HP balance.",
         "- `../supplementary/Supplementary_chr15_deletion_classification.tsv` — deletion class calls from CN transitions.",
         "- `../supplementary/Supplementary_parental_reference_calibration.png` — continuous control-calibrated parental reference visualization.",
         "- `../supplementary/Figure1_threshold_sensitivity.tsv` — sensitivity to M/P thresholds.",
         "- `../source_data/Figure1A_single_molecule_MM_ML_source_data.tsv.gz` — raw long-format MM/ML calls used as source data.",
         "- `../source_data/Figure1B_cohort_methylation_source_data.tsv` — source data for the cohort methylation matrix.",
+        "- `../source_data/Figure1C_deletion_span_parental_profile_source_data.tsv` — source data for Panel C profile scores.",
         "- `../source_data/Figure1C_sequencing_support_source_data.tsv` — source data for sequencing/phasing support.",
         "- `../source_data/Supplementary_chr15_copy_number_segments_source_data.tsv` — CN segments underlying supplementary CN plots.",
         "- `../Figure1_configuration.json` — exact thresholds and genomic intervals.",
@@ -5002,13 +6321,16 @@ def main() -> None:
             support_path = table_dir / "SupplementaryFigure1_coverage_phasing_support.tsv"
         if not support_path.exists():
             support_path = table_dir / "Figure1D_coverage_phasing_support.tsv"
-        provenance_path = table_dir / "Figure1A_modbamtools_representatives.tsv"
-        if not provenance_path.exists():
-            provenance_path = table_dir / "Figure1B_modbamtools_representatives.tsv"
-        missing=[p for p in (panel_path,support_path,provenance_path) if not p.exists()]
+        structural_path = table_dir / "Figure1_structural_IC_evidence.tsv"
+        mechanistic_path = supp_dir / "closest_methylation_template_per_sample.tsv"
+        deletion_profile_path = table_dir / "Figure1C_deletion_span_parental_profile.tsv"
+        missing=[p for p in (panel_path,support_path,structural_path,mechanistic_path,deletion_profile_path) if not p.exists()]
         if missing: raise FileNotFoundError("Render-only mode missing:\n"+"\n".join(map(str,missing)))
         panel_rows=read_tsv(panel_path); support_rows=read_tsv(support_path)
-        modbam_panels, prov = load_modbamtools_panels_from_provenance(provenance_path,outdir)
+        mechanistic_rows=read_tsv(mechanistic_path)
+        deletion_profile_rows=read_tsv(deletion_profile_path)
+        structural_rows_cached=read_tsv(structural_path)
+        structural_cached={r["sample_id"]:r for r in structural_rows_cached}
         inference_path=table_dir/"Figure1B_sample_level_inference.tsv"
         if not inference_path.exists():
             inference_path=table_dir/"Figure1C_sample_level_inference.tsv"
@@ -5023,15 +6345,30 @@ def main() -> None:
                 m=safe_float(rr.get("maternal_reference_beta")); p=safe_float(rr.get("paternal_reference_beta")); b=safe_float(rr.get("decision_boundary_beta"))
                 if m is not None and p is not None and b is not None:
                     render_reference=ParentalReferenceModel(m,p,b,tuple((rr.get("controls_used") or "").split(";")) if rr.get("controls_used") else tuple())
+        render_modbam_panels = None
+        provenance_path = table_dir / "Figure1A_modbamtools_representatives.tsv"
+        legacy_provenance_path = table_dir / "Figure1B_modbamtools_representatives.tsv"
+        cached_provenance_path = (
+            provenance_path if provenance_path.exists() else legacy_provenance_path
+        )
+        if cached_provenance_path.exists():
+            try:
+                render_modbam_panels, _ = load_modbamtools_panels_from_provenance(
+                    cached_provenance_path, outdir
+                )
+            except (FileNotFoundError, RuntimeError) as exc:
+                print(f"[WARN] Could not load cached ModBAM panels: {exc}", file=sys.stderr)
         create_main_figure(
-            figure_dir / "Figure1_mechanistic",
+            figure_dir / "Figure1",
             panel_rows,
-            modbam_panels,
-            MODBAM_PLOT_REGION,
-            support_rows,
+            mechanistic_rows,
+            structural_cached,
+            deletion_profile_rows,
             inference,
             render_reference,
+            modbam_panels=render_modbam_panels,
         )
+        render_supplementary_sequencing_qc(support_rows, outdir)
         return
 
     vcf_dir=Path(VCF_DIR); bam_dir=Path(BAM_DIR); modbam_dir=Path(MODBAM_DIR); methylation_dir=Path(METHYLATION_DIR); cnv_dir=Path(CNV_DIR); metadata_path=Path(METADATA_PATH)
@@ -5044,6 +6381,8 @@ def main() -> None:
             "blocks":find_sample_file(vcf_dir,sample_id,".blocks.tsv"), "sv_vcf":sv_vcf,
             "combined_bed":find_sample_file(methylation_dir,sample_id,".combined.bed"),
             "hap1_bed":find_sample_file(methylation_dir,sample_id,".hap1.bed"), "hap2_bed":find_sample_file(methylation_dir,sample_id,".hap2.bed"),
+            "combined_bw":find_sample_file(methylation_dir,sample_id,".combined.bw"),
+            "hap1_bw":find_sample_file(methylation_dir,sample_id,".hap1.bw"), "hap2_bw":find_sample_file(methylation_dir,sample_id,".hap2.bw"),
             "cnv_log":find_sample_file(cnv_dir,sample_id,".log"),
             "cnv_bed":find_sample_file(cnv_dir,sample_id,".cnv.bed"),
             "cn_track":find_hificnv_cn_track(cnv_dir,sample_id),
@@ -5094,6 +6433,13 @@ def main() -> None:
     write_tsv(table_dir/"Figure1_parental_reference_model.tsv",parental_reference_rows)
     panel_rows=build_physical_allele_rows(matrix_rows,structural)
     write_tsv(table_dir/"Figure1B_allele_methylation_matrix.tsv",panel_rows)
+    deletion_profile_rows=build_deletion_profile_classification_rows(
+        sample_files, structural, panel_rows
+    )
+    write_tsv(
+        table_dir/"Figure1C_deletion_span_parental_profile.tsv",
+        deletion_profile_rows,
+    )
     render_parental_reference_calibration(panel_rows,parental_reference,outdir)
 
     preflight=build_preflight_qc(sample_files,structural,stats_by_sample)
@@ -5113,6 +6459,11 @@ def main() -> None:
 
     support_rows=build_support_rows(summary_rows,matrix_rows,sample_files,structural)
     write_tsv(table_dir/"Figure1C_coverage_phasing_support.tsv",support_rows)
+
+    # Supplementary figures now carry the per-sample measurement detail and
+    # technical sequencing/QC evidence, keeping the main Figure 1 biologically focused.
+    render_supplementary_methylation_tracks(sample_files,matrix_rows,outdir)
+    render_supplementary_sequencing_qc(support_rows,outdir)
 
     provenance_path=table_dir/"Figure1A_modbamtools_representatives.tsv"
     if SKIP_MODBAMTOOLS:
@@ -5147,17 +6498,20 @@ def main() -> None:
 
     # Nature-style minimum underlying source data.
     write_tsv(source_dir/"Figure1B_cohort_methylation_source_data.tsv",panel_rows)
+    write_tsv(source_dir/"Figure1C_deletion_span_parental_profile_source_data.tsv",deletion_profile_rows)
     write_tsv(source_dir/"Figure1_parental_reference_model_source_data.tsv",parental_reference_rows)
     write_tsv(source_dir/"Figure1C_sequencing_support_source_data.tsv",support_rows)
+    write_tsv(source_dir/"Supplementary_FigureS2_sequencing_QC_source_data.tsv",support_rows)
 
     create_main_figure(
-        figure_dir / "Figure1_mechanistic",
+        figure_dir / "Figure1",
         panel_rows,
-        modbam_panels,
-        MODBAM_PLOT_REGION,
-        support_rows,
+        mechanistic_rows,
+        structural,
+        deletion_profile_rows,
         inference_rows,
         parental_reference,
+        modbam_panels=modbam_panels,
     )
     write_report(
         report_dir / "Figure1_report.md",
@@ -5173,6 +6527,7 @@ def main() -> None:
         preflight_rows=preflight,
         parental_reference=parental_reference,
         parental_reference_rows=parental_reference_rows,
+        deletion_profile_rows=deletion_profile_rows,
         outdir=outdir,
     )
 
@@ -5182,10 +6537,14 @@ def main() -> None:
         "reference":"T2T-CHM13v2.0","cohort":[{"sample_id":s,"diagnosis":c,"mechanism":m} for s,c,m in sorted_cohort()],
         "regions":{"domain":[CHROM,DOMAIN_START,DOMAIN_END],"PWS_AS_IC":[CHROM,PWS_IC_START,PWS_IC_END],"modbam_display":MODBAM_PLOT_REGION},
         "figure_layout":{
-            "panel_a":"enlarged representative single-molecule ModBAM profiles",
-            "panel_b":"complete-cohort IC methylation matrix",
-            "panel_c":"continuous sequencing depth and haplotype support",
-            "omitted":"redundant conceptual molecular-configuration schematic",
+            "panel_a":"complete-cohort IC methylation heatmap plus one vertically matched ModBAM representative per cohort block",
+            "panel_b":"cohort-wide chr15 copy-number/deletion track with curated gene and PWS/AS ICR annotation",
+            "panel_c":"each retained deletion-sample methylation track compared directly with unaffected-control maternal-like and paternal-like chromosome profiles",
+            "shared_legend":"external legend band below panels B and C",
+            "png_dpi":PUBLICATION_DPI,
+            "supplementary_S1":"per-sample CpG methylation tracks around the IC",
+            "supplementary_S2":"sequencing depth and haplotype-resolution QC",
+            "extended_data":"raw ModBAM single-molecule profiles when generated",
         },
         "parental_state_model":{
             "method":PARENTAL_REFERENCE_METHOD,
@@ -5195,6 +6554,15 @@ def main() -> None:
             "decision_boundary_beta":parental_reference.decision_boundary,
             "leave_one_control_out_for_controls":CONTROL_REFERENCE_LEAVE_ONE_OUT,
             "classification_rule":"M if descriptive CpG-bootstrap CI is entirely above control-derived boundary; P if entirely below; otherwise uncertain; nearest centroid fallback if CI unavailable",
+        },
+        "deletion_span_profile_model":{
+            "reference_training":"unaffected controls only; haplotypes anchored by IC state",
+            "validation":"DiGeorge haplotypes held out and evaluated on the shared deletion core",
+            "minimum_control_M_vs_P_delta":DELETION_PROFILE_MIN_REFERENCE_DELTA,
+            "maximum_within_state_control_range":DELETION_PROFILE_MAX_WITHIN_STATE_RANGE,
+            "minimum_shared_informative_CpGs":DELETION_PROFILE_MIN_SHARED_CPGS,
+            "score":"(RMSE_P - RMSE_M) / (RMSE_P + RMSE_M)",
+            "uncertain_if_absolute_score_below":DELETION_PROFILE_MIN_SCORE_MAGNITUDE,
         },
         "supplementary_extreme_threshold_sensitivity":{
             "legacy_maternal_threshold":EXTREME_MATERNAL_THRESHOLD,
@@ -5208,6 +6576,7 @@ def main() -> None:
             "higher_coverage_reference_CpGs":HIGHER_COVERAGE_CPGS,
             "interpretation":"Values below the higher-coverage reference remain valid when they meet state-assignment minima; they are not sample failures.",
             "modbam_min_MAPQ":MODBAM_MIN_MAPQ,
+            "modbam_plot_width_px":MODBAM_PLOT_WIDTH,
             "modbam_fallback_min_molecules":MIN_MODBAM_FALLBACK_MOLECULES,
         },
         "copy_number":{
