@@ -6,7 +6,7 @@ include { ALIGN_HIFI } from './modules/local/alignment'
 include { CALL_SMALL_VARIANTS; FILTER_SMALL_VARIANTS; DISCOVER_SV; CALL_SV } from './modules/local/variants'
 include { PHASE_VARIANTS } from './modules/local/phasing'
 include { CALL_CNV } from './modules/local/cnv'
-include { CALL_METHYLATION } from './modules/local/methylation'
+include { CALL_METHYLATION } from './modules/local/methylation_process'
 include { MAKE_FIGURE_1; MAKE_FIGURE_2; MAKE_FIGURE_3; MAKE_FIGURE_4; MAKE_FIGURE_5 } from './modules/local/figures'
 
 def helpMessage() {
@@ -155,7 +155,11 @@ workflow {
     }
 
     if (stage_index >= stage_order.indexOf('methylation')) {
-        CALL_METHYLATION(PHASE_VARIANTS.out.phased, cpg_model)
+        methylation_inputs = PHASE_VARIANTS.out.phased.map {
+            sample, bam, bai, small_vcf, small_tbi, sv_vcf, sv_tbi, stats, blocks, summary ->
+                tuple(sample, bam, bai)
+        }
+        CALL_METHYLATION(methylation_inputs, cpg_model)
     }
 
     if (params.run_figures && params.stage == 'all') {
