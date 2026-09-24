@@ -80,8 +80,11 @@ BAM_DIR = DEFAULT_PHASED_DIR
 # If the HiPhase BAMs retain MM/ML, leave MODBAM_DIR = BAM_DIR.
 MODBAM_DIR = BAM_DIR
 
-# pb-CpG-tools outputs: *.combined.bed, *.hap1.bed and *.hap2.bed.
+# Current pb-CpG-tools outputs: *.cpg.combined.*, *.cpg.hap1.* and
+# *.cpg.hap2.*.  Keep the tag explicit so legacy symlinks with shorter names
+# can never be selected accidentally.
 METHYLATION_DIR = DEFAULT_METHYLATION_DIR
+PBCPG_OUTPUT_TAG = ".cpg"
 
 # HiFiCNV outputs used for depth/QC support.
 CNV_DIR = DEFAULT_CNV_DIR
@@ -6379,10 +6382,10 @@ def main() -> None:
         sample_files[sample_id]={
             "bam":find_sample_file(bam_dir,sample_id,".bam"), "modbam":find_modbam_file(modbam_dir,sample_id),
             "blocks":find_sample_file(vcf_dir,sample_id,".blocks.tsv"), "sv_vcf":sv_vcf,
-            "combined_bed":find_sample_file(methylation_dir,sample_id,".combined.bed"),
-            "hap1_bed":find_sample_file(methylation_dir,sample_id,".hap1.bed"), "hap2_bed":find_sample_file(methylation_dir,sample_id,".hap2.bed"),
-            "combined_bw":find_sample_file(methylation_dir,sample_id,".combined.bw"),
-            "hap1_bw":find_sample_file(methylation_dir,sample_id,".hap1.bw"), "hap2_bw":find_sample_file(methylation_dir,sample_id,".hap2.bw"),
+            "combined_bed":find_sample_file(methylation_dir,sample_id,f"{PBCPG_OUTPUT_TAG}.combined.bed"),
+            "hap1_bed":find_sample_file(methylation_dir,sample_id,f"{PBCPG_OUTPUT_TAG}.hap1.bed"), "hap2_bed":find_sample_file(methylation_dir,sample_id,f"{PBCPG_OUTPUT_TAG}.hap2.bed"),
+            "combined_bw":find_sample_file(methylation_dir,sample_id,f"{PBCPG_OUTPUT_TAG}.combined.bw"),
+            "hap1_bw":find_sample_file(methylation_dir,sample_id,f"{PBCPG_OUTPUT_TAG}.hap1.bw"), "hap2_bw":find_sample_file(methylation_dir,sample_id,f"{PBCPG_OUTPUT_TAG}.hap2.bw"),
             "cnv_log":find_sample_file(cnv_dir,sample_id,".log"),
             "cnv_bed":find_sample_file(cnv_dir,sample_id,".cnv.bed"),
             "cn_track":find_hificnv_cn_track(cnv_dir,sample_id),
