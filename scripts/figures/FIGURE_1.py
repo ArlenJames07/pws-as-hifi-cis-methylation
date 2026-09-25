@@ -39,6 +39,8 @@ DEFAULT_PHASED_DIR = DEFAULT_RESULTS_DIR / "04_phasing"
 DEFAULT_METHYLATION_DIR = DEFAULT_RESULTS_DIR / "06_methylation"
 DEFAULT_CNV_DIR = DEFAULT_RESULTS_DIR / "05_cnv"
 DEFAULT_METADATA = PROJECT_ROOT / "assets" / "metadata.csv"
+DEFAULT_ANALYSIS_DIR = DEFAULT_RESULTS_DIR / "analysis" / "01_evidence_matrix"
+DEFAULT_STRUCTURAL_EVIDENCE = DEFAULT_ANALYSIS_DIR / "chr15_structural_evidence.tsv"
 DEFAULT_GTF = Path("/home/rare/arlen/reference/chm13v22.sorted.gtf")
 
 CHROM = "chr15"
@@ -91,6 +93,10 @@ CNV_DIR = DEFAULT_CNV_DIR
 
 # Non-identifiable cohort metadata.
 METADATA_PATH = DEFAULT_METADATA
+
+# Canonical structural/deletion evidence produced by scripts/analysis.
+# Figure 1 is a consumer of this table and must not re-infer deletion status.
+STRUCTURAL_EVIDENCE_PATH = DEFAULT_STRUCTURAL_EVIDENCE
 
 # Output directory for tables, ModBAMtools panels, reports and Figure 1.
 OUTDIR = DEFAULT_OUTDIR
@@ -424,6 +430,12 @@ def validate_configuration() -> None:
             f"METADATA_PATH does not exist: {METADATA_PATH}"
         )
 
+    if not Path(STRUCTURAL_EVIDENCE_PATH).exists():
+        raise FileNotFoundError(
+            f"STRUCTURAL_EVIDENCE_PATH does not exist: {STRUCTURAL_EVIDENCE_PATH}\n"
+            "Run `python3 scripts/analysis/run_analysis.py` before Figure 1."
+        )
+
     if not SKIP_MODBAMTOOLS and USE_EXTERNAL_MODBAMTOOLS:
         executable = str(MODBAMTOOLS_BIN)
         if shutil.which(executable) is None and not Path(executable).exists():
@@ -442,6 +454,16 @@ def safe_float(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return x if np.isfinite(x) else None
+
+
+def safe_int(value: Any) -> int | None:
+    x = safe_float(value)
+    if x is None:
+        return None
+    rounded = round(x)
+    if not np.isclose(x, rounded, rtol=0.0, atol=1e-6):
+        return None
+    return int(rounded)
 
 
 def fmt(value: Any, digits: int = 3) -> str:
@@ -465,6 +487,99 @@ def write_tsv(path: Path, rows: list[dict[str, Any]], fieldnames: list[str] | No
 def read_tsv(path: Path) -> list[dict[str, str]]:
     with path.open(newline="") as handle:
         return list(csv.DictReader(handle, delimiter="\t"))
+
+
+def _parse_optional_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+    token = str(value).strip().lower()
+    if token in {"true", "1", "yes"}:
+        return True
+    if token in {"false", "0", "no"}:
+        return False
+    return None
+
+
+def load_analysis_structural_evidence(
+    path: Path,
+) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
+    """Load canonical chr15 structural evidence produced by scripts/analysis.
+
+    Figure 1 deliberately does not call HiFiCNV/pbsv classifiers. Structural
+    inference is performed once in the analysis layer and consumed here.
+    """
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Canonical structural evidence not found: {path}\n"
+            "Run `python3 scripts/analysis/run_analysis.py` before Figure 1."
+        )
+
+    rows: list[dict[str, Any]] = [dict(row) for row in read_tsv(path)]
+    expected_mechanism = {
+        sample_id: mechanism
+        for sample_id, _clinical, mechanism in sorted_cohort()
+    }
+    expected_samples = set(expected_mechanism)
+    observed_samples = {str(row.get("sample_id", "")).strip() for row in rows}
+
+    missing = sorted(expected_samples - observed_samples)
+    extra = sorted(observed_samples - expected_samples)
+    if missing or extra:
+        parts = []
+        if missing:
+            parts.append("missing: " + ", ".join(missing))
+        if extra:
+            parts.append("unexpected: " + ", ".join(extra))
+        raise RuntimeError(
+            "Structural analysis table does not match the Figure 1 cohort ("
+            + "; ".join(parts)
+            + ")"
+        )
+
+    boolean_fields = (
+        "expected_ic_deletion",
+        "sv_support",
+        "cnv_support",
+        "pbsv_support",
+        "hificnv_support",
+        "cn1_eligible",
+    )
+    normalized_rows: list[dict[str, Any]] = []
+    labels = sample_display_labels()
+    clinical_by_sample = {
+        sample_id: clinical
+        for sample_id, clinical, _mechanism in sorted_cohort()
+    }
+    for row in rows:
+        sample_id = str(row["sample_id"]).strip()
+        normalized = dict(row)
+        for field in boolean_fields:
+            if field in normalized:
+                normalized[field] = _parse_optional_bool(normalized[field])
+
+        # Keep Figure 1's display vocabulary stable. The analysis layer may call
+        # the orthogonal group "DiGeorge" whereas the figure uses "Disease control".
+        normalized["molecular_mechanism"] = expected_mechanism[sample_id]
+        normalized["display_label"] = labels[sample_id]
+        normalized["clinical_diagnosis"] = clinical_by_sample[sample_id]
+
+        # Compatibility aliases expected by existing Figure 1 report/QC code.
+        if "pbsv_support" not in normalized:
+            normalized["pbsv_support"] = normalized.get("sv_support")
+        if "pbsv_note" not in normalized:
+            normalized["pbsv_note"] = normalized.get("sv_note", "")
+        if "hificnv_support" not in normalized:
+            normalized["hificnv_support"] = normalized.get("cnv_support")
+        if "hificnv_note" not in normalized:
+            normalized["hificnv_note"] = normalized.get("cnv_note", "")
+
+        normalized_rows.append(normalized)
+
+    by_sample = {row["sample_id"]: row for row in normalized_rows}
+    return by_sample, normalized_rows
 
 
 def read_metadata(path: Path) -> dict[str, dict[str, str]]:
@@ -2491,12 +2606,22 @@ def build_deletion_profile_classification_rows(
         if mechanism in {"PWS-DEL", "AS-DEL"}
         and structural_by_sample[sample_id].get("ic_deletion_status") == "confirmed"
     ]
-    intervals = [
-        (int(row["cn_event_start"]), int(row["cn_event_end"]))
-        for _sample_id, _mechanism, row in deletion_samples
-        if safe_float(row.get("cn_event_start")) is not None
-        and safe_float(row.get("cn_event_end")) is not None
-    ]
+    interval_by_sample: dict[str, tuple[int, int]] = {}
+    for sample_id, _mechanism, row in deletion_samples:
+        start = safe_int(row.get("cn_event_start"))
+        end = safe_int(row.get("cn_event_end"))
+        if start is None or end is None:
+            raise ValueError(
+                f"Confirmed chr15 deletion for {sample_id} has invalid coordinates: "
+                f"start={row.get('cn_event_start')!r}, end={row.get('cn_event_end')!r}"
+            )
+        if start < 0 or end <= start:
+            raise ValueError(
+                f"Confirmed chr15 deletion for {sample_id} has a non-positive interval: "
+                f"start={start}, end={end}"
+            )
+        interval_by_sample[sample_id] = (start, end)
+    intervals = list(interval_by_sample.values())
     if not intervals:
         return []
     union_start = min(start for start, _end in intervals)
@@ -2555,8 +2680,7 @@ def build_deletion_profile_classification_rows(
 
     rows: list[dict[str, Any]] = []
     for sample_id, mechanism, structural_row in deletion_samples:
-        start = int(structural_row["cn_event_start"])
-        end = int(structural_row["cn_event_end"])
+        start, end = interval_by_sample[sample_id]
         maternal_reference, paternal_reference, informative = make_reference(start, end)
         observed = read_bigwig_region_values(
             sample_files[sample_id].get("combined_bw"), start, end
@@ -6276,14 +6400,14 @@ def write_report(
         "",
         "## 13. Reproducibility and source-data index",
         "",
-        "- `../tables/Figure1_structural_IC_evidence.tsv` — integrated HiFiCNV/pbsv structural evidence.",
+        "- `../../../analysis/01_evidence_matrix/chr15_structural_evidence.tsv` — canonical analysis-derived HiFiCNV/pbsv structural evidence consumed by Figure 1.",
         "- `../tables/Figure1_parental_reference_model.tsv` — control-derived parental centroids, decision boundary and leave-one-control-out references.",
         "- `../tables/Figure1A_modbamtools_representatives.tsv` — representative raw single-molecule panels.",
         "- `../tables/Figure1B_allele_methylation_matrix.tsv` — plotted cohort methylation values and states.",
         "- `../tables/Figure1B_sample_level_inference.tsv` — participant-level PWS-DEL versus AS-DEL inference.",
         "- `../tables/Figure1C_deletion_span_parental_profile.tsv` — sample-specific deletion-span RMSE classification and separated control/DiGeorge haplotype validation.",
         "- `../tables/Figure1C_coverage_phasing_support.tsv` — depth, HP depth, CpG support and HP balance.",
-        "- `../supplementary/Supplementary_chr15_deletion_classification.tsv` — deletion class calls from CN transitions.",
+        "- `../supplementary/Supplementary_chr15_deletion_classification.tsv` — figure-local snapshot of the canonical analysis-derived deletion classification.",
         "- `../supplementary/Supplementary_parental_reference_calibration.png` — continuous control-calibrated parental reference visualization.",
         "- `../supplementary/Figure1_threshold_sensitivity.tsv` — sensitivity to M/P thresholds.",
         "- `../source_data/Figure1A_single_molecule_MM_ML_source_data.tsv.gz` — raw long-format MM/ML calls used as source data.",
@@ -6324,7 +6448,7 @@ def main() -> None:
             support_path = table_dir / "SupplementaryFigure1_coverage_phasing_support.tsv"
         if not support_path.exists():
             support_path = table_dir / "Figure1D_coverage_phasing_support.tsv"
-        structural_path = table_dir / "Figure1_structural_IC_evidence.tsv"
+        structural_path = Path(STRUCTURAL_EVIDENCE_PATH)
         mechanistic_path = supp_dir / "closest_methylation_template_per_sample.tsv"
         deletion_profile_path = table_dir / "Figure1C_deletion_span_parental_profile.tsv"
         missing=[p for p in (panel_path,support_path,structural_path,mechanistic_path,deletion_profile_path) if not p.exists()]
@@ -6332,8 +6456,9 @@ def main() -> None:
         panel_rows=read_tsv(panel_path); support_rows=read_tsv(support_path)
         mechanistic_rows=read_tsv(mechanistic_path)
         deletion_profile_rows=read_tsv(deletion_profile_path)
-        structural_rows_cached=read_tsv(structural_path)
-        structural_cached={r["sample_id"]:r for r in structural_rows_cached}
+        structural_cached, structural_rows_cached = load_analysis_structural_evidence(
+            structural_path
+        )
         inference_path=table_dir/"Figure1B_sample_level_inference.tsv"
         if not inference_path.exists():
             inference_path=table_dir/"Figure1C_sample_level_inference.tsv"
@@ -6391,14 +6516,14 @@ def main() -> None:
             "cn_track":find_hificnv_cn_track(cnv_dir,sample_id),
         }
 
-    structural={sid:structural_ic_status(sid,mech,sample_files[sid]) for sid,_c,mech in sorted_cohort()}
-    write_tsv(table_dir/"Figure1_structural_IC_evidence.tsv",list(structural.values()))
+    # Structural/deletion inference is performed once by scripts/analysis.
+    # Figure 1 consumes the canonical result and never reclassifies CN/SV status.
+    structural, cn_classification_rows = load_analysis_structural_evidence(
+        Path(STRUCTURAL_EVIDENCE_PATH)
+    )
 
-    # Copy-number evidence is treated independently from pbsv breakpoint calls.
-    # HiFiCNV CN≈1 spanning the IC is sufficient dosage evidence for a
-    # hemizygous deletion, even when a sequence-resolved SV breakpoint is not
-    # emitted in repetitive BP regions.
-    cn_classification_rows = build_cn_classification_rows(sample_files, structural)
+    # Keep a figure-local snapshot for manuscript packaging/backward compatibility.
+    # This is a copy of the analysis result, not a Figure 1-derived classification.
     write_tsv(
         supp_dir/"Supplementary_chr15_deletion_classification.tsv",
         cn_classification_rows,
@@ -6591,7 +6716,7 @@ def main() -> None:
         },
         "bootstrap":{"CpG_descriptive_replicates":CPG_BOOTSTRAP_REPLICATES,"participant_replicates":SAMPLE_BOOTSTRAP_REPLICATES,"seed":BOOTSTRAP_SEED},
         "structural_rule":"HiFiCNV CN-loss spanning the IC or pbsv DEL spanning the IC confirms hemizygous dosage; pbsv is orthogonal breakpoint support, not a mandatory gate.",
-        "input_paths":{"vcf_dir":str(vcf_dir),"bam_dir":str(bam_dir),"modbam_dir":str(modbam_dir),"methylation_dir":str(methylation_dir),"cnv_dir":str(cnv_dir),"metadata":str(metadata_path)},
+        "input_paths":{"vcf_dir":str(vcf_dir),"bam_dir":str(bam_dir),"modbam_dir":str(modbam_dir),"methylation_dir":str(methylation_dir),"cnv_dir":str(cnv_dir),"metadata":str(metadata_path),"structural_evidence":str(Path(STRUCTURAL_EVIDENCE_PATH))},
     }
     with (outdir/"Figure1_configuration.json").open("w") as h: json.dump(run_parameters,h,indent=2)
 
