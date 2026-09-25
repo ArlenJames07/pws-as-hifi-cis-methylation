@@ -70,7 +70,7 @@ workflow FIGURES {
     methylation_files = methylation.map { _sample, files -> files }.collect()
 
     MAKE_FIGURE_1(phased_files, cnv_files, methylation_files, gtf, metadata)
-    MAKE_FIGURE_2(cnv_files, methylation_files, gtf, metadata, icr_bed, segdup_bed)
+    MAKE_FIGURE_2(methylation_files, MAKE_FIGURE_1.out.results, gtf, metadata)
     MAKE_FIGURE_3(methylation_files, MAKE_FIGURE_1.out.results, gtf, segdup_bed, imprintome_bed, icr_bed, repeats_bed)
 
     emit:

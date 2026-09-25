@@ -8,7 +8,7 @@ results directory:
 ```text
 results/07_figures/
 ├── figure_1/{figures,tables,logs,reports}/
-├── figure_2/{figures,tables,reports}/
+├── figure_2/{figures,reports}/
 ├── figure_3/{figures,tables,logs,reports}/
 ├── figure_4/{figures,tables,reports}/
 └── figure_5/{figures,tables,reports}/
@@ -22,6 +22,15 @@ python3 scripts/figures/FIGURE_1.py
 
 creates `results/07_figures/figure_1/figures/Figure1.png` and the associated
 tables. An explicit `--outdir` still overrides the default.
+
+`FIGURE_2.py` takes no command-line arguments and only renders the tables
+written by `scripts/analysis/run_analysis.py`; run that first. Its paths,
+palette and layout settings are in the configuration block at the top of the
+script. Panel a shows the PWS maternal-retained minus AS paternal-retained
+contrast in the common reciprocal CN=1 interval, panel b the prespecified
+regional effects, and panel c phase-invariant ASM in controls and DiGeorge
+participants. Heatmaps, raw profiles, support tracks and depth diagnostics are
+in the two supplementary figures.
 
 After editing Figure 1 layout or styling, redraw it from its existing plotting
 tables without rereading the large BAM and methylation files:
@@ -53,7 +62,7 @@ Primary outputs:
 | Script | Main output |
 |---|---|
 | `FIGURE_1.py` | `Figure1.{png,pdf,svg}` plus QC and assignment tables |
-| `FIGURE_2.py` | `Figure2_reciprocal_cis_architecture_improved.*` |
+| `FIGURE_2.py` | `Figure2.{png,pdf,svg}`, `Supplementary_Figure_S2A_retained_copy_profiles.*`, `Supplementary_Figure_S2B_depth_robustness.*` |
 | `FIGURE_3.py` | `Figure3_boundary_mapping_improved.*` |
 | `FIGURE_4.py` | `Figure4_per_molecule_cis_architecture.*` |
 | `FIGURE_5.py` | `Figure5_v7.{png,pdf}` |

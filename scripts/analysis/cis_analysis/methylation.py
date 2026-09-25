@@ -155,3 +155,31 @@ def read_track(path: Path, chrom: str, start: int, end: int) -> MethylationTrack
         values = numerator / denominator
         depths = denominator
     return MethylationTrack(pos, values, depths, path)
+
+
+def downsample_track(
+    track: MethylationTrack,
+    fraction: float,
+    min_coverage: int,
+    rng: np.random.Generator,
+) -> MethylationTrack:
+    if not 0.0 < fraction <= 1.0:
+        raise ValueError(f"Downsampling fraction must be in (0, 1]: {fraction}")
+    coverage = np.rint(track.coverage).astype(np.int64)
+    expected = track.beta * coverage
+    methylated = np.floor(expected).astype(np.int64)
+    methylated += rng.random(len(expected)) < (expected - methylated)
+    methylated = np.clip(methylated, 0, coverage)
+    kept = rng.binomial(coverage, fraction) if fraction < 1.0 else coverage.copy()
+    kept_methylated = np.zeros_like(kept)
+    positive = kept > 0
+    kept_methylated[positive] = rng.hypergeometric(
+        methylated[positive], coverage[positive] - methylated[positive], kept[positive]
+    )
+    keep = kept >= int(min_coverage)
+    return MethylationTrack(
+        track.position[keep],
+        kept_methylated[keep] / kept[keep],
+        kept[keep].astype(float),
+        track.source,
+    )

@@ -45,36 +45,34 @@ process MAKE_FIGURE_2 {
     publishDir "${params.outdir}/07_figures", mode: params.publish_mode
 
     input:
-    path cnv_files
     path methylation_files
+    path figure_1_results
     path gtf, stageAs: 'reference/genes.gtf'
     path metadata, stageAs: 'reference/metadata.csv'
-    path icr_bed, stageAs: 'reference/icr.bed'
-    path segdup_bed, stageAs: 'reference/segdup.bed'
 
     output:
     path "figure_2", emit: results
 
     script:
     """
-    mkdir -p cnv methylation figure_2
-    for f in ${cnv_files}; do ln -sf "\$(realpath \"\$f\")" cnv/; done
-    for f in ${methylation_files}; do ln -sf "\$(realpath \"\$f\")" methylation/; done
+    mkdir -p project/assets project/reference project/results/06_methylation project/results/07_figures project/scripts
+    cp -r ${moduleDir}/../../scripts/analysis ${moduleDir}/../../scripts/figures project/scripts/
+    cp ${metadata} project/assets/metadata.csv
+    ln -s "\$(realpath ${gtf})" project/reference/genes.gtf
+    for f in ${methylation_files}; do ln -sf "\$(realpath \"\$f\")" project/results/06_methylation/; done
+    ln -s "\$(realpath ${figure_1_results})" project/results/07_figures/figure_1
 
-    python ${moduleDir}/../../scripts/figures/FIGURE_2.py \
-        --methylation-dir methylation \
-        --metadata ${metadata} \
-        --gtf ${gtf} \
-        --cnv-dir cnv \
-        --icr-bed ${icr_bed} \
-        --segdup-bed ${segdup_bed} \
-        --outdir figure_2
+    python project/scripts/analysis/run_analysis.py
+    python project/scripts/figures/FIGURE_2.py
+
+    mv project/results/07_figures/figure_2 figure_2
+    cp -r project/results/analysis figure_2/analysis
     """
 
     stub:
     """
-    mkdir -p figure_2/figures
-    touch figure_2/figures/Figure2_reciprocal_cis_architecture.png
+    mkdir -p figure_2/figures figure_2/analysis/03_cis_architecture
+    touch figure_2/figures/Figure2.png figure_2/analysis/03_cis_architecture/figure2_analysis_report.tsv
     """
 }
 

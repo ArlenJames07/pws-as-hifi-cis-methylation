@@ -13,7 +13,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts" / "analysis"))
 
-from cis_analysis import classify_evidence, load_deletion_map, read_track
+from cis_analysis import MethylationTrack, classify_evidence, downsample_track, load_deletion_map, read_track
 
 
 def load_analysis_script(filename: str, module_name: str):
@@ -33,7 +33,7 @@ class AnalysisCoreTests(unittest.TestCase):
             gtf = root / "genes.gtf"
             names = ("MAGEL2", "NDN", "SNRPN", "SNHG14", "SNORD116-1", "UBE3A", "GABRB3", "GABRA5", "GABRG3", "OCA2")
             lines = [
-                f'chr15\ttest\tgene\t{1000 + i * 1000}\t{1500 + i * 1000}\t.\t+\t.\tgene_id "G{i}"; gene_name "{name}";'
+                f'chr15\ttest\tgene\t{1000 + i * 100_000}\t{1500 + i * 100_000}\t.\t+\t.\tgene_id "G{i}"; gene_name "{name}";'
                 for i, name in enumerate(names)
             ]
             gtf.write_text("\n".join(lines) + "\n")
@@ -45,8 +45,39 @@ class AnalysisCoreTests(unittest.TestCase):
             rows = region_script.build_regions()
             self.assertEqual(len(rows), 7)
             self.assertEqual(rows[-1]["region_id"], "PWS/AS imprinting centre")
+            self.assertEqual(
+                sorted(row["display_order"] for row in rows), list(range(1, 8))
+            )
             region_script.main()
             self.assertTrue(region_script.OUTPUT_PATH.is_file())
+            self.assertTrue((root / "annotation_genes.tsv").is_file())
+
+    def test_downsampling_thins_reads_without_rescaling_beta(self) -> None:
+        track = MethylationTrack(
+            np.array([10, 20, 30]), np.array([0.5, 1.0, 0.0]), np.array([30.0, 30.0, 30.0]), Path("x")
+        )
+        same = downsample_track(track, 1.0, 4, np.random.default_rng(1))
+        np.testing.assert_allclose(same.beta, track.beta)
+        np.testing.assert_allclose(same.coverage, track.coverage)
+        thinned = downsample_track(track, 0.4, 4, np.random.default_rng(1))
+        self.assertTrue(np.all(thinned.coverage < 30))
+        self.assertTrue(np.all((thinned.beta >= 0) & (thinned.beta <= 1)))
+        np.testing.assert_allclose(thinned.beta[thinned.position == 20], 1.0)
+        np.testing.assert_allclose(thinned.beta[thinned.position == 30], 0.0)
+
+    def test_smoothing_never_bridges_gaps(self) -> None:
+        script = load_analysis_script("03_reciprocal_cis_architecture.py", "analysis_smoothing_test")
+        script.ROLLING_WINDOWS = 3
+        script.ROLLING_MIN_WINDOWS = 3
+        evaluable = np.array([True] * 4 + [False] + [True] * 4)
+        starts = np.arange(9) * 10
+        segment = script.contiguous_segments(evaluable, starts, starts + 10)
+        self.assertEqual(segment.tolist(), [0, 0, 0, 0, -1, 1, 1, 1, 1])
+        values = np.where(evaluable, np.r_[np.zeros(4), np.nan, np.ones(4)], np.nan)
+        smoothed = script.gap_safe_rolling_median(values, segment)
+        self.assertTrue(np.isnan(smoothed[[0, 3, 4, 5, 8]]).all())
+        np.testing.assert_allclose(smoothed[[1, 2]], 0.0)
+        np.testing.assert_allclose(smoothed[[6, 7]], 1.0)
 
     def test_pbcpg_bed_columns(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -204,36 +235,67 @@ class AnalysisCoreTests(unittest.TestCase):
             depth_script.MIN_AS_PARTICIPANTS = 2
             depth_script.run()
             regions_path = out / "prespecified_regions.tsv"
+            names = (
+                "MAGEL2/NDN",
+                "PWS/AS imprinting centre",
+                "SNRPN/SNHG14",
+                "SNORD116",
+                "UBE3A",
+                "GABRB3/GABA receptor cluster",
+                "OCA2 downstream control",
+            )
             pd.DataFrame(
                 [
                     {
-                        "region_id": "synthetic_domain",
+                        "region_id": name,
                         "chrom": "chr15",
-                        "start": 100,
-                        "end": 900,
+                        "start": 100 + index * 100,
+                        "end": 200 + index * 100,
+                        "display_order": index + 1,
                     }
+                    for index, name in enumerate(names)
                 ]
             ).to_csv(regions_path, sep="\t", index=False)
             architecture_script = load_analysis_script(
                 "03_reciprocal_cis_architecture.py", "analysis_architecture_test"
             )
+            architecture_script.METADATA_PATH = metadata
             architecture_script.EVIDENCE_MATRIX_PATH = matrix_path
+            architecture_script.TRACK_INVENTORY_PATH = first / "methylation_track_inventory.tsv"
+            architecture_script.COMMON_CN1_PATH = first / "common_reciprocal_cn1_core.tsv"
             architecture_script.REGIONS_PATH = regions_path
             architecture_script.OUTPUT_DIR = third
-            architecture_script.MIN_CPGS = 3
-            architecture_script.MIN_PWS_PARTICIPANTS = 3
-            architecture_script.MIN_AS_PARTICIPANTS = 2
-            architecture_script.BOOTSTRAP_REPLICATES = 100
-            architecture_script.RANDOM_SEED = 20260924
-            architecture_script.FOCAL_EFFECT_THRESHOLD = 0.10
-            architecture_script.EQUIVALENCE_MARGIN = 0.10
+            architecture_script.WINDOW_BOOTSTRAP_REPLICATES = 100
+            architecture_script.REGION_BOOTSTRAP_REPLICATES = 200
+            architecture_script.ROLLING_WINDOWS = 3
+            architecture_script.ROLLING_MIN_WINDOWS = 3
+            architecture_script.FOCAL_MIN_WINDOWS = 3
+            architecture_script.MIN_REGION_CPGS = 3
             architecture_script.run()
-            architecture = pd.read_csv(
-                out / "03_cis_architecture" / "cis_architecture_windows.tsv.gz", sep="\t"
-            )
-            np.testing.assert_allclose(architecture["delta_maternal_minus_paternal"], 0.6)
-            np.testing.assert_allclose(architecture["scaffold_beta"], 0.5)
-            np.testing.assert_allclose(architecture["absolute_asm_mean"], 0.6)
+            windows = pd.read_csv(third / "parent_associated_windows.tsv.gz", sep="\t")
+            np.testing.assert_allclose(windows["delta_beta"], 0.6)
+            np.testing.assert_allclose(windows["delta_ci_low"], 0.6)
+            self.assertTrue(windows["in_common_cn1"].all())
+            self.assertEqual(windows["pws_n"].min(), 3)
+            self.assertEqual(windows["as_n"].min(), 2)
+            np.testing.assert_allclose(windows["delta_rolling_median"].dropna(), 0.6)
+            regional = pd.read_csv(third / "regional_parent_contrasts.tsv", sep="\t")
+            self.assertEqual(regional["region_id"].tolist(), list(names))
+            np.testing.assert_allclose(regional["delta_beta"], 0.6)
+            self.assertTrue(regional["status"].eq("maternal_retained_higher").all())
+            self.assertTrue(regional["robust"].all())
+            asm = pd.read_csv(third / "regional_phase_invariant_asm.tsv", sep="\t")
+            np.testing.assert_allclose(asm.loc[asm["estimator"].eq("full_depth"), "mean_absolute_asm"], 0.6)
+            np.testing.assert_allclose(asm["mean_absolute_asm"], 0.6, atol=0.1)
+            self.assertEqual(set(asm["cohort"]), {"Control", "DiGeorge"})
+            self.assertTrue(asm.loc[asm["cohort"].eq("DiGeorge"), "ci_low"].isna().all())
+            participants = pd.read_csv(third / "regional_participant_values.tsv.gz", sep="\t")
+            diploid = participants[participants["analysis"].eq("phase_invariant_asm")]
+            self.assertFalse(diploid["retained_copy"].str.contains("maternal|paternal").any())
+            focal = pd.read_csv(third / "focal_intervals.tsv", sep="\t")
+            self.assertEqual(int(focal["reproducible"].sum()), 1)
+            report = pd.read_csv(third / "figure2_analysis_report.tsv", sep="\t")
+            self.assertFalse(report["status"].eq("fail").any())
 
 
 if __name__ == "__main__":

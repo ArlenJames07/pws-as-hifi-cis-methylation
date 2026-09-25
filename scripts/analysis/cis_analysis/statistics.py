@@ -8,41 +8,93 @@ import pandas as pd
 from .methylation import MethylationTrack
 
 
+def _window_index(positions: np.ndarray, windows: pd.DataFrame) -> np.ndarray:
+    starts = windows["start"].to_numpy(dtype=np.int64)
+    ends = windows["end"].to_numpy(dtype=np.int64)
+    index = np.searchsorted(starts, positions, side="right") - 1
+    valid = (index >= 0) & (positions < ends[np.clip(index, 0, len(ends) - 1)])
+    return np.where(valid, index, -1)
+
+
+def _cap_label(cap: float) -> str:
+    return str(float(cap)).rstrip("0").rstrip(".").replace(".", "p")
+
+
+def _site_summary(
+    track: MethylationTrack,
+    windows: pd.DataFrame,
+    effective_cap: float,
+    mask: np.ndarray | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    beta, coverage, positions = track.beta, track.coverage, track.position
+    if mask is not None:
+        beta, coverage, positions = beta[mask], coverage[mask], positions[mask]
+    index = _window_index(positions, windows)
+    keep = index >= 0
+    frame = pd.DataFrame(
+        {
+            "window": index[keep],
+            "beta": beta[keep],
+            "coverage": coverage[keep],
+            "capped": np.minimum(coverage[keep], float(effective_cap)),
+        }
+    )
+    grouped = frame.groupby("window", sort=True)
+    out = pd.DataFrame(index=pd.RangeIndex(len(windows)))
+    out["n_cpg"] = grouped.size().reindex(out.index, fill_value=0).astype(int)
+    out["beta_site_mean"] = grouped["beta"].mean().reindex(out.index)
+    out["effective_obs"] = grouped["capped"].sum().reindex(out.index, fill_value=0.0)
+    out["median_depth"] = grouped["coverage"].median().reindex(out.index)
+    out["mean_depth"] = grouped["coverage"].mean().reindex(out.index)
+    out["total_depth"] = grouped["coverage"].sum().reindex(out.index, fill_value=0.0)
+    frame["weighted"] = frame["beta"] * frame["coverage"]
+    out["beta_read_weighted"] = (
+        frame.groupby("window")["weighted"].sum().reindex(out.index) / out["total_depth"].replace(0, np.nan)
+    )
+    return out, frame
+
+
 def summarize_track_windows(
     track: MethylationTrack,
     windows: pd.DataFrame,
     depth_caps: Sequence[float] = (5.0, 10.0, 15.0, 20.0),
+    effective_cap: float = 15.0,
+    downsampled: MethylationTrack | None = None,
+    shared_mask: np.ndarray | None = None,
 ) -> pd.DataFrame:
-    rows: list[dict[str, object]] = []
-    positions = track.position
-    for window in windows.itertuples(index=False):
-        left = int(np.searchsorted(positions, int(window.start), side="left"))
-        right = int(np.searchsorted(positions, int(window.end), side="left"))
-        beta = track.beta[left:right]
-        coverage = track.coverage[left:right]
-        row: dict[str, object] = {
-            "chrom": window.chrom,
-            "window_id": window.window_id,
-            "start": int(window.start),
-            "end": int(window.end),
-            "mid": float(window.mid),
-            "n_cpg": int(len(beta)),
-            "median_depth": float(np.median(coverage)) if len(beta) else np.nan,
-            "mean_depth": float(np.mean(coverage)) if len(beta) else np.nan,
-            "total_depth": float(np.sum(coverage)) if len(beta) else 0.0,
-            "beta_site_mean": float(np.mean(beta)) if len(beta) else np.nan,
-            "beta_read_weighted": (
-                float(np.average(beta, weights=coverage)) if len(beta) and coverage.sum() > 0 else np.nan
-            ),
-        }
-        for cap in depth_caps:
-            weights = np.minimum(coverage, float(cap))
-            label = str(float(cap)).rstrip("0").rstrip(".").replace(".", "p")
-            row[f"beta_depth_cap_{label}"] = (
-                float(np.average(beta, weights=weights)) if len(beta) and weights.sum() > 0 else np.nan
-            )
-        rows.append(row)
-    return pd.DataFrame(rows)
+    base, frame = _site_summary(track, windows, effective_cap)
+    out = windows[["chrom", "window_id", "start", "end", "mid"]].reset_index(drop=True).copy()
+    out["start"] = out["start"].astype(int)
+    out["end"] = out["end"].astype(int)
+    out["mid"] = out["mid"].astype(float)
+    for column in (
+        "n_cpg",
+        "median_depth",
+        "mean_depth",
+        "total_depth",
+        "beta_site_mean",
+        "beta_read_weighted",
+        "effective_obs",
+    ):
+        out[column] = base[column].to_numpy()
+    for cap in depth_caps:
+        weights = np.minimum(frame["coverage"].to_numpy(), float(cap))
+        numerator = pd.Series(frame["beta"].to_numpy() * weights).groupby(frame["window"].to_numpy()).sum()
+        denominator = pd.Series(weights).groupby(frame["window"].to_numpy()).sum()
+        out[f"beta_depth_cap_{_cap_label(cap)}"] = (
+            (numerator / denominator.replace(0, np.nan)).reindex(out.index).to_numpy()
+        )
+    if downsampled is not None:
+        thinned, _ = _site_summary(downsampled, windows, effective_cap)
+        out["n_cpg_downsampled"] = thinned["n_cpg"].to_numpy()
+        out["beta_downsampled"] = thinned["beta_site_mean"].to_numpy()
+        out["effective_obs_downsampled"] = thinned["effective_obs"].to_numpy()
+    if shared_mask is not None:
+        shared, _ = _site_summary(track, windows, effective_cap, shared_mask)
+        out["n_cpg_shared"] = shared["n_cpg"].to_numpy()
+        out["beta_shared_cpg"] = shared["beta_site_mean"].to_numpy()
+        out["effective_obs_shared"] = shared["effective_obs"].to_numpy()
+    return out
 
 
 def bootstrap_group_contrast(
