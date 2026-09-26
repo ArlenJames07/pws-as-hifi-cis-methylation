@@ -22,6 +22,8 @@ from cis_analysis import (
     read_track,
     read_track_metadata,
     summarize_track_windows,
+    downsample_track,
+    MethylationTrack,
 )
 
 
@@ -38,7 +40,7 @@ STRUCTURAL_EVIDENCE_PATH = OUTPUT_DIR / "chr15_structural_evidence.tsv"
 CN_SEGMENTS_PATH = OUTPUT_DIR / "chr15_copy_number_segments.tsv.gz"
 
 CHROM = "chr15"
-DOMAIN_START = 22_000_000
+DOMAIN_START = 20_500_000
 DOMAIN_END = 28_000_000
 WINDOW_SIZE = 1_000
 
@@ -48,6 +50,15 @@ PWS_IC_END = 22_693_494
 CN1_BREAKPOINT_BUFFER = 75_000
 MIN_CPGS = 3
 DEPTH_CAPS = (5.0, 10.0, 15.0, 20.0)
+EFFECTIVE_COVERAGE_CAP = 15.0
+DOWNSAMPLE_TARGET_DEPTH: float | None = None
+DOWNSAMPLE_MIN_COVERAGE = 4
+DOWNSAMPLE_SEED = 20260925
+TRACK_SETS = {
+    "reciprocal_deletion": {"mechanisms": ("PWS-DEL", "AS-DEL"), "kinds": ("combined",), "shared_scope": "all_tracks"},
+    "diploid_haplotypes": {"mechanisms": ("Control", "DiGeorge"), "kinds": ("hap1", "hap2"), "shared_scope": "within_participant"},
+    "diploid_combined": {"mechanisms": ("Control", "DiGeorge"), "kinds": ("combined",), "shared_scope": "all_tracks"},
+}
 
 # HiFiCNV thresholds used only to establish structural provenance.
 CN_DELETION_THRESHOLD = 1.35
@@ -508,6 +519,38 @@ def build_structural_evidence(cohort) -> tuple[pd.DataFrame, pd.DataFrame]:
     return structural, cn_segments
 
 
+def track_set_for(mechanism: str, kind: str) -> str | None:
+    for name, spec in TRACK_SETS.items():
+        if mechanism in spec["mechanisms"] and kind in spec["kinds"]:
+            return name
+    return None
+
+
+def reference_depth(track: MethylationTrack, interval: tuple[int, int]) -> float:
+    inside = (track.position >= interval[0]) & (track.position < interval[1])
+    values = track.coverage[inside] if inside.any() else track.coverage
+    return float(np.median(values)) if len(values) else np.nan
+
+
+def shared_positions(
+    tracks: dict[tuple[str, str], MethylationTrack],
+    members: list[tuple[str, str]],
+    scope: str,
+) -> dict[tuple[str, str], np.ndarray]:
+    groups: dict[object, list[tuple[str, str]]] = {}
+    for key in members:
+        groups.setdefault(key[0] if scope == "within_participant" else "all", []).append(key)
+    output: dict[tuple[str, str], np.ndarray] = {}
+    for keys in groups.values():
+        common = None
+        for key in keys:
+            positions = tracks[key].position
+            common = positions if common is None else np.intersect1d(common, positions, assume_unique=True)
+        for key in keys:
+            output[key] = common if len(keys) > 1 else np.array([], dtype=np.int64)
+    return output
+
+
 def track_kinds(mechanism: str) -> tuple[str, ...]:
     # Keep all three tracks in the evidence inventory. Deletion haplotype tracks
     # remain technical-only evidence and are never parentally interpreted.
@@ -540,9 +583,13 @@ def build_matrix() -> dict[str, Path]:
     rows: list[pd.DataFrame] = []
     inventory: list[dict[str, object]] = []
 
+    if common_interval[0] < DOMAIN_START or common_interval[1] > DOMAIN_END:
+        raise ValueError(
+            f"Common CN=1 interval {common_interval} extends beyond DOMAIN_START/DOMAIN_END"
+        )
+    tracks: dict[tuple[str, str], MethylationTrack] = {}
     for sample_id in cohort.samples:
         mechanism = cohort.mechanism(sample_id)
-        deletion_interval = deletion_map.interval(sample_id)
         for kind in track_kinds(mechanism):
             path = find_track(METHYLATION_DIR, sample_id, kind)
             required = kind == "combined" or mechanism in {"Control", "DiGeorge", "PWS-mUPD"}
@@ -565,6 +612,7 @@ def build_matrix() -> dict[str, Path]:
 
             track = read_track(path, CHROM, DOMAIN_START, DOMAIN_END)
             track_metadata = read_track_metadata(path)
+            tracks[(sample_id, kind)] = track
             inventory.append(
                 {
                     "sample_id": sample_id,
@@ -577,6 +625,8 @@ def build_matrix() -> dict[str, Path]:
                     "domain_median_depth": (
                         float(np.median(track.coverage)) if len(track.coverage) else np.nan
                     ),
+                    "reference_depth_common_cn1": reference_depth(track, common_interval),
+                    "track_set": track_set_for(mechanism, kind),
                     "pbcpgtools_version": track_metadata.get("pb_cpg_tools_version"),
                     "pileup_mode": track_metadata.get("pileup_mode"),
                     "modsites_mode": track_metadata.get("modsites_mode"),
@@ -585,7 +635,50 @@ def build_matrix() -> dict[str, Path]:
                 }
             )
 
-            summary = summarize_track_windows(track, windows, DEPTH_CAPS)
+    loaded = pd.DataFrame(inventory)
+    loaded = loaded[loaded["status"].eq("loaded")]
+    shared: dict[tuple[str, str], np.ndarray] = {}
+    fractions: dict[tuple[str, str], float] = {}
+    targets: dict[str, float] = {}
+    for set_name, spec in TRACK_SETS.items():
+        members_table = loaded[loaded["track_set"].eq(set_name)]
+        members = list(zip(members_table["sample_id"], members_table["track_kind"]))
+        if not members:
+            continue
+        shared.update(shared_positions(tracks, members, str(spec["shared_scope"])))
+        depths = members_table["reference_depth_common_cn1"].astype(float)
+        target = float(DOWNSAMPLE_TARGET_DEPTH) if DOWNSAMPLE_TARGET_DEPTH else float(depths.min())
+        targets[set_name] = target
+        for key, depth in zip(members, depths):
+            fractions[key] = min(1.0, target / depth) if depth > 0 else 1.0
+    for row in inventory:
+        key = (row["sample_id"], row["track_kind"])
+        row["downsample_target_depth"] = targets.get(row.get("track_set"), np.nan)
+        row["downsample_fraction"] = fractions.get(key, np.nan)
+        row["shared_cpgs"] = len(shared[key]) if key in shared else np.nan
+
+    rng = np.random.default_rng(DOWNSAMPLE_SEED)
+    for sample_id in cohort.samples:
+        mechanism = cohort.mechanism(sample_id)
+        deletion_interval = deletion_map.interval(sample_id)
+        for kind in track_kinds(mechanism):
+            key = (sample_id, kind)
+            if key not in tracks:
+                continue
+            track = tracks[key]
+            thinned = mask = None
+            if key in fractions:
+                thinned = downsample_track(track, fractions[key], DOWNSAMPLE_MIN_COVERAGE, rng)
+                mask = np.isin(track.position, shared[key], assume_unique=True)
+            summary = summarize_track_windows(
+                track, windows, DEPTH_CAPS, EFFECTIVE_COVERAGE_CAP, thinned, mask
+            )
+            for column in (
+                "n_cpg_downsampled", "beta_downsampled", "effective_obs_downsampled",
+                "n_cpg_shared", "beta_shared_cpg", "effective_obs_shared",
+            ):
+                if column not in summary:
+                    summary[column] = np.nan
             annotations = [
                 classify_evidence(
                     mechanism,
@@ -601,7 +694,9 @@ def build_matrix() -> dict[str, Path]:
             summary.insert(0, "sample_id", sample_id)
             summary.insert(1, "mechanism", mechanism)
             summary.insert(2, "track_kind", kind)
-            summary["source_path"] = str(path)
+            summary["track_set"] = track_set_for(mechanism, kind)
+            summary["downsample_fraction"] = fractions.get(key, np.nan)
+            summary["source_path"] = str(track.source)
             summary = pd.concat(
                 [summary.reset_index(drop=True), annotation_table], axis=1
             )
@@ -686,6 +781,11 @@ def build_matrix() -> dict[str, Path]:
         "window_size": WINDOW_SIZE,
         "minimum_cpgs": MIN_CPGS,
         "depth_caps": list(DEPTH_CAPS),
+        "effective_coverage_cap": EFFECTIVE_COVERAGE_CAP,
+        "downsample_targets": targets,
+        "downsample_min_coverage": DOWNSAMPLE_MIN_COVERAGE,
+        "downsample_seed": DOWNSAMPLE_SEED,
+        "shared_cpg_scopes": {name: spec["shared_scope"] for name, spec in TRACK_SETS.items()},
         "primary_beta": "unweighted mean of emitted CpG modification scores",
         "structural_provenance_rule": (
             "HiFiCNV CN1 spanning the IC is required for directional retained-allele "

@@ -60,3 +60,28 @@ Primary outputs:
 
 See the repository-level README for required parameters, workflow execution,
 output locations, and data-privacy rules.
+
+## Natural hemizygous cis architecture
+
+`FIGURE_2_CIS_ARCHITECTURE.py` is an independent, modular Figure 2 analysis.
+It reads the exact confirmed CN=1 intervals from Figure 1's deletion
+provenance table and writes to `results/07_figures/figure_2_cis_architecture/`.
+It never modifies the existing `FIGURE_2.py` outputs.
+
+```bash
+PYTHONNOUSERSITE=1 python3 scripts/figures/FIGURE_2_CIS_ARCHITECTURE.py
+PYTHONNOUSERSITE=1 python3 scripts/figures/FIGURE_2_CIS_ARCHITECTURE.py --self-test
+PYTHONNOUSERSITE=1 python3 scripts/figures/FIGURE_2_CIS_ARCHITECTURE.py --render-only
+```
+
+The script exports 600 dpi PNG, PDF, SVG, panel source tables, full
+evaluability and coverage tables, fixed-bin and shared-CpG sensitivities,
+supplementary numerical H1/H2 profiles, a downsampling manifest, and a design
+report. Its four main panels show the participant retained-copy heatmap, shared
+cis-methylation scaffold, parent-associated divergence and prespecified regional
+robustness estimates. Figure 1 remains the sole main-figure deletion-span and
+diagnostic-classification display. The optional `--run-downsampling` path performs 50 seeded molecule-level
+subsamples of the indexed modBAMs, calls CpG methylation afresh with
+pb-CpG-tools, and exports profile correlations and regional stability. It is
+disk and compute intensive; absent this flag, its result table explicitly says
+`not_run` and no BED-level thinning is substituted.
