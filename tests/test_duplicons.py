@@ -16,9 +16,30 @@ DUPLICONS = ROOT / "scripts" / "duplicons"
 sys.path.insert(0, str(DUPLICONS))
 
 from duplicon_analysis import junction_reads  # noqa: E402
+from duplicon_analysis.followup import status_row  # noqa: E402
 from duplicon_analysis.assembly import Block  # noqa: E402
 
 COMP = str.maketrans("ACGT", "TGCA")
+
+
+class BreakpointInferenceTests(unittest.TestCase):
+    def test_nonhomologous_assembly_does_not_confirm_nahr(self) -> None:
+        edges = {"proximal": {"pos": 1000}, "distal": {"pos": 2000}}
+        nahr = {"consistent_with_NAHR": True, "pair": "SD-A/SD-B",
+                "poisson_p_at_crossover": 0.5}
+        fusion = {"hap": "primary", "contig": "ctg1", "ref_left": 1000,
+                  "ref_right": 2000, "fusion_pair": "SD-A/SD-B",
+                  "fusion_homolog_distance_bp": 50_000}
+        row = status_row("001P", "PWS-DEL", edges, nahr, {}, 0, fusion, None)
+        self.assertEqual(row["status"], "confirmed by assembly")
+        self.assertNotIn("confirmed NAHR", row["evidence"])
+        fusion["fusion_homolog_distance_bp"] = 10_000
+        self.assertEqual(status_row("001P", "PWS-DEL", edges, nahr, {}, 0, fusion, None)["status"],
+                         "confirmed NAHR")
+        fusion["fusion_homolog_distance_bp"] = 50_000
+        nahr["poisson_p_at_crossover"] = 1e-4
+        self.assertEqual(status_row("001P", "PWS-DEL", edges, nahr, {}, 0, fusion, None)["status"],
+                         "confirmed NAHR")
 
 
 def load_script(filename: str, module_name: str):

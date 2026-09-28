@@ -4,6 +4,13 @@ Reproducible Nextflow DSL2 workflow for PacBio HiFi variant calling, phasing,
 copy-number analysis, native CpG methylation, and manuscript figures in the
 Prader–Willi/Angelman syndrome 15q11–q13 imprinted domain.
 
+**Current manuscript figures:** run the pre-figure stages with
+`--run_figures false`, then run `scripts/analysis/run_analysis.py` and the
+standalone figure programs. The older Nextflow `MAKE_FIGURE_2` process still
+passes options not supported by the updated `FIGURE_2.py`; it is not a
+validated figure-rendering path. See [the figure redesign](docs/figure_redesign_q1.md)
+and [figure scripts](scripts/figures/README.md).
+
 ## What the workflow runs
 
 ```text

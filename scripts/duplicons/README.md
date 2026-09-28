@@ -136,7 +136,7 @@ side) and genes from the GTF in params.local.yml. Verdicts in `breakpoint_status
 | status | meaning |
 |---|---|
 | junction resolved at bp level | >= 2 deletion-type split reads in the carrier, none in the panel |
-| confirmed NAHR | edges at homologous positions of one direct pair + junction-read excess at the crossover or an assembled fusion; or an assembled contig that switches between the two copies of a direct pair within 20 kb of homologous positions |
+| confirmed NAHR | edges at homologous positions of one direct pair plus junction-read excess at the carrier's crossover; or an assembled contig that switches between the two copies of a direct pair within 20 kb of homologous positions. A contig crossing the deletion without that homologous switch supports the deletion, not NAHR. |
 | confirmed by assembly | a contig spans the deletion, but its switch is not at homologous positions of a direct pair |
 | compatible with NAHR | edges homologous, no independent confirmation yet |
 | edges near one SD pair, not homologous | same pair, > 20 kb from homologous positions |
@@ -278,22 +278,20 @@ as the breakpoint; use copy number for events without junction reads.
 - Not run on real data. RepeatMasker and pb-CpG-tools were replaced by stand-ins in
   the end-to-end test.
 
-## A reader issue in the existing code
+## Verify methylation score scales
 
-`scripts/analysis/cis_analysis/methylation.py::read_track` divides a score by 100
-only when it is above 1 (`value = score / 100.0 if score > 1.0 else score`).
-pb-CpG-tools writes 0–100, so every CpG scored between 0 and 1 % is read as a
-fraction: a 0.5 % site becomes β = 0.5. The same per-value rule appears in
-`FIGURE_2.py` (line 1736), `FIGURE_3.py` (line 1734) and `FIGURE_5.py` (line 474).
-The scripts here use their own reader (`duplicon_analysis/methylation.py`), which
-decides the scale once per file. To see how many sites are affected in a track:
+The current `scripts/analysis/cis_analysis/methylation.py::read_track` divides
+every pb-CpG-tools `mod_score` by 100. The duplicon analysis reader also selects
+the score scale once per file. Other historical figure paths may still use a
+per-value conversion: audit any figure that re-reads methylation BEDs directly
+before using it for a manuscript. To estimate the number of low-score sites:
 
 ```bash
 awk '!/^#/ && $4 > 0 && $4 <= 1' results/06_methylation/013A/013A.cpg.combined.bed | wc -l
 ```
 
-If that number is not negligible, change the line in `read_track` to always divide
-pb-CpG-tools scores by 100 and rerun analyses 01–03.
+If legacy outputs were made with per-value conversion, rerun the affected figure
+analysis with the corrected reader before interpreting methylation differences.
 
 ## References
 

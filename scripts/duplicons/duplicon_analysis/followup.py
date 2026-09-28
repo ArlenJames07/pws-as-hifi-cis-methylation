@@ -322,7 +322,7 @@ def status_row(sample: str, mechanism: str, edges: dict, nahr: dict, split: dict
     edge_missing = prox.get("pos") is None or dist.get("pos") is None
     if split_ok:
         status = "junction resolved at bp level"
-    elif (nahr_ok and (jr_ok or fusion)) or fusion_nahr_ok:
+    elif (nahr_ok and jr_ok) or fusion_nahr_ok:
         status = "confirmed NAHR"
     elif fusion:
         status = "confirmed by assembly"
