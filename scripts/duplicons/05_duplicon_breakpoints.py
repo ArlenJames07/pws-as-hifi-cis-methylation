@@ -27,7 +27,12 @@ Outputs: results/08_duplicons/breakpoints/
   sunk15q.bins.tsv             copy number per 5-kb bin, every participant
   sunk15q.overview.png         look at this first: panel genomes must read CN 2
   sunk15q.zoom_<sample>.png
-  breakpoints_vs_hificnv.tsv   SUNK switch vs HiFiCNV CN=1 edge
+  breakpoints_vs_hificnv.tsv   per carrier and edge: outer edge of the CN=1 run that carries
+                               the deletion vs the HiFiCNV edge, SD block, BP cluster
+  nahr_test.tsv                per carrier: are both edges at homologous positions of one
+                               direct SD pair?
+  junction_enrichment.tsv      junction-like reads in carriers vs the rate in genomes with
+                               two copies of chr15 (they occur in normal chromosomes too)
   junction_reads.tsv           every read with SUNKs of both copies of a pair
   junction_crossovers.tsv      per participant and SD pair: junction reads and the
                                crossover interval in copy A and copy B coordinates
@@ -45,6 +50,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config as C  # noqa: E402
 from duplicon_analysis import ANALYSIS_DIR, cis_analysis, junction_reads, sunk  # noqa: E402
 from duplicon_analysis import bams as bam_lookup  # noqa: E402
+from duplicon_analysis import breakpoint_summary  # noqa: E402
 from duplicon_analysis.tools import log  # noqa: E402
 
 SUNK_K = 31
@@ -62,36 +68,6 @@ def breakpoint_landmarks() -> dict[str, int]:
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return dict(module.BREAKPOINT_LANDMARKS)
-
-
-def compare_with_hificnv(outdir: Path) -> pd.DataFrame:
-    try:
-        transitions = pd.read_csv(outdir / "sunk15q.transitions.tsv", sep="\t")
-    except pd.errors.EmptyDataError:          # no switch in any participant
-        transitions = pd.DataFrame(columns=["sample", "from_cn", "to_cn", "refined_pos"])
-    if not C.STRUCTURAL_EVIDENCE_PATH.is_file():
-        log(f"{C.STRUCTURAL_EVIDENCE_PATH} not found; run analysis 01 for the HiFiCNV comparison")
-        return pd.DataFrame()
-    structural = pd.read_csv(C.STRUCTURAL_EVIDENCE_PATH, sep="\t")
-    structural = structural[structural["molecular_mechanism"].isin(C.MECHANISMS_DELETION)]
-    rows = []
-    for record in structural.itertuples(index=False):
-        tr = transitions[transitions["sample"] == record.sample_id] if len(transitions) else transitions
-        for edge, pos, (a, b) in (("proximal", record.cn_event_start, (2, 1)),
-                                  ("distal", record.cn_event_end, (1, 2))):
-            if pd.isna(pos):
-                continue
-            row = {"sample_id": record.sample_id, "edge": edge, "hificnv_pos": int(pos)}
-            cand = tr[(tr["from_cn"] == a) & (tr["to_cn"] == b)] if len(tr) else tr
-            if len(cand):
-                best = cand.iloc[(cand["refined_pos"] - pos).abs().argsort().iloc[0]]
-                row.update({"sunk_pos": int(best["refined_pos"]), "shift_bp": int(best["refined_pos"] - pos),
-                            "sd_at_sunk_pos": best["sd_at_refined"],
-                            "support_start": int(best["support_start"]), "support_end": int(best["support_end"])})
-            rows.append(row)
-    table = pd.DataFrame(rows)
-    table.to_csv(outdir / "breakpoints_vs_hificnv.tsv", sep="\t", index=False, na_rep="NA")
-    return table
 
 
 def main(argv=None) -> None:
@@ -125,7 +101,6 @@ def main(argv=None) -> None:
         "--landmarks-bed", str(landmarks), "--bin-bp", str(BIN_BP), "--min-sunks", str(MIN_SUNKS),
         "--p-switch", str(P_SWITCH), "--outdir", str(out), "--prefix", "sunk15q",
     ])
-    compare_with_hificnv(out)
 
     pairs, index = junction_reads.prepare(ref / "window.fa", ref / f"sunks.k{SUNK_K}.txt",
                                           ref / "window.sd_pairs.bedpe", SUNK_K)
@@ -164,7 +139,18 @@ def main(argv=None) -> None:
     frames = [f for f in summary if len(f)]
     (pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()).to_csv(
         out / "junction_crossovers.tsv", sep="\t", index=False, na_rep="NA")
+    summarise(out)
     log(f"done: {out}")
+
+
+def summarise(out: Path) -> None:
+    """breakpoints_vs_hificnv.tsv, nahr_test.tsv, junction_enrichment.tsv (also 05b)."""
+    if not C.STRUCTURAL_EVIDENCE_PATH.is_file():
+        log(f"{C.STRUCTURAL_EVIDENCE_PATH} not found; breakpoint summary skipped")
+        return
+    breakpoint_summary.summarise(out, C.STRUCTURAL_EVIDENCE_PATH, C.REFERENCE_DIR / "window.sd.bed",
+                                 C.REFERENCE_DIR / "window.sd_pairs.bedpe", C.MECHANISMS_DELETION,
+                                 C.MECHANISMS_DIPLOID_CHR15, C.BP_CLUSTERS, BIN_BP)
 
 
 if __name__ == "__main__":

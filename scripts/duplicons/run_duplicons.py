@@ -2,7 +2,7 @@
 """
 Run the duplicon, breakpoint and repeat analyses in order.
 
-    python3 scripts/duplicons/run_duplicons.py                 # 00 (input check), 01, 02, 03, 05, 06, 07
+    python3 scripts/duplicons/run_duplicons.py                 # 00 (input check), 01, 02, 03, 05, 06, 07, 08
     python3 scripts/duplicons/run_duplicons.py --from 05        # resume at a step (skips 00)
     python3 scripts/duplicons/run_duplicons.py --with-04        # include the optional
                                                                 # contig-label step
@@ -27,6 +27,7 @@ STEPS = (
     ("05", "05_duplicon_breakpoints.py"),
     ("06", "06_haplotype_repeats.py"),
     ("07", "07_repeat_methylation.py"),
+    ("08", "08_followup.py"),
 )
 PER_SAMPLE = {"00", "02", "03", "04"}
 CACHED = {"01", "02", "03", "04"}
@@ -35,7 +36,7 @@ CACHED = {"01", "02", "03", "04"}
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--from", dest="start", default="00")
-    ap.add_argument("--to", dest="stop", default="07")
+    ap.add_argument("--to", dest="stop", default="08")
     ap.add_argument("--with-04", action="store_true", help="run the optional contig-label step")
     ap.add_argument("--samples")
     ap.add_argument("--force", action="store_true")

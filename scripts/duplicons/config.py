@@ -63,7 +63,8 @@ METHYLATION_DIR = RESULTS / "06_methylation"        # <sample>/<sample>.cpg.{com
 STRUCTURAL_EVIDENCE_PATH = RESULTS / "analysis" / "01_evidence_matrix" / "chr15_structural_evidence.tsv"
 
 # --------------------------------------------------------------- outputs
-OUT = RESULTS / "08_duplicons"
+# Another folder (e.g. a small supplementary window) with DUPLICON_OUT=results/08_duplicons_007P
+OUT = _env_path("DUPLICON_OUT", RESULTS / "08_duplicons")
 REFERENCE_DIR = OUT / "reference"                   # 01
 SUNK_DIR = OUT / "sunk_counts"                      # 02
 ASSEMBLY_DIR = OUT / "assembly"                     # 03, 04
@@ -73,8 +74,9 @@ REPEAT_METHYLATION_DIR = OUT / "repeat_methylation" # 07
 
 # --------------------------------------------------------------- regions
 CHROM = "chr15"
-# BP1-BP5 plus unique flank in T2T-CHM13 (Hoeps et al. 2026 place 15q11.2-q13.3 at
-# chr15:20.0-30.8 Mb). Must contain every HiFiCNV deletion interval.
+# BP1-BP5 plus flank in T2T-CHM13 (Hoeps et al. 2026 place 15q11.2-q13.3 at
+# chr15:20.0-30.8 Mb). Must contain every HiFiCNV deletion interval: the largest
+# (007P) is chr15:17,592,000-31,842,000, so the window starts at 17.5 Mb.
 WINDOW = os.environ.get("DUPLICON_WINDOW", "chr15:17500000-33000000")
 # Diploid, SD-free normalisation region; confirm CN=2 in all 17 genomes with HiFiCNV.
 CONTROL_REGION = os.environ.get("DUPLICON_CONTROL_REGION", "chr15:60000000-64000000")
@@ -84,6 +86,12 @@ DOMAIN_END = int(os.environ.get("DUPLICON_DOMAIN_END", 28_000_000))
 PWS_IC_START = int(os.environ.get("DUPLICON_IC_START", 22_691_258))
 PWS_IC_END = int(os.environ.get("DUPLICON_IC_END", 22_693_494))
 CN1_BREAKPOINT_BUFFER = int(os.environ.get("DUPLICON_CN1_BUFFER", 75_000))
+# Breakpoint clusters used only to label edges (manuscript Methods, T2T-CHM13v2.0).
+BP_CLUSTERS = {
+    "BP1": (17_691_439, 20_454_275),
+    "BP2": (20_753_698, 21_183_655),
+    "BP3": (25_875_912, 26_632_507),
+}
 
 # ------------------------------------------------------------- programs
 SAMTOOLS = PARAMS.get("samtools_bin", "samtools")

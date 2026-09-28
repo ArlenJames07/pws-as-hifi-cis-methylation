@@ -21,8 +21,10 @@ pws-as-hifi-cis-methylation/
 │       ├── 03_place_contigs.py          hifiasm contigs → CHM13, 15q extraction, haplotype RepeatMasker
 │       ├── 04_assembly_methylation.py   optional: IC-anchored label for the contig carrying the IC
 │       ├── 05_duplicon_breakpoints.py   breakpoints inside the duplicons: copy number + junction reads
+│       ├── 05b_breakpoint_summary.py    rebuilds 05's per-carrier tables in seconds
 │       ├── 06_haplotype_repeats.py      repeats per assembled haplotype, repeat content of indels
 │       ├── 07_repeat_methylation.py     parent-of-origin methylation of repeat elements
+│       ├── 08_followup.py               split reads, assembled fusions, mUPD check, genes; one status table
 │       ├── run_duplicons.py             runs 01–07 in order
 │       ├── assemblies.example.csv
 │       ├── bams.example.csv
@@ -124,6 +126,61 @@ python3 tests/test_duplicons.py -v
 Steps 01–04 skip outputs that already exist (`--force` recomputes). Run analysis
 `01_build_chr15_evidence_matrix.py` first: 03, 05 and 07 read its CN=1 intervals.
 
+### Step 08: one table with what is confirmed and what is missing
+
+`08_followup.py` reads 03, 05/05b and 07 and adds split reads (SA tags linking the two
+edges, counted in the carrier and in every genome with two copies of chr15 at the same
+positions), assembled fusions (with the nearest confidently placed contig blocks on each
+side) and genes from the GTF in params.local.yml. Verdicts in `breakpoint_status.tsv`:
+
+| status | meaning |
+|---|---|
+| junction resolved at bp level | >= 2 deletion-type split reads in the carrier, none in the panel |
+| confirmed NAHR | edges at homologous positions of one direct pair + junction-read excess at the crossover or an assembled fusion; or an assembled contig that switches between the two copies of a direct pair within 20 kb of homologous positions |
+| confirmed by assembly | a contig spans the deletion, but its switch is not at homologous positions of a direct pair |
+| compatible with NAHR | edges homologous, no independent confirmation yet |
+| edges near one SD pair, not homologous | same pair, > 20 kb from homologous positions |
+| edge outside WINDOW | CN 1 reaches the end of the window |
+| unresolved | no pair links the edges |
+
+Assembled junctions are placed more precisely than SUNK edges (the contig switch is within
+the last/first confidently placed block, usually < 1 kb); `crossover_estimate` gives the best
+available position: split reads (bp) > assembly > SUNK edges (several kb).
+
+`methylation_domains.tsv` reports runs of 250-kb bins with permutation p <= 0.05 and a raw
+difference of at least 0.02 (smaller shifts are of the size of the centring offset). Each
+bin and each domain also get three contrasts against the biparental genomes (combined
+methylation): PWS-DEL (maternal copy only), AS-DEL (paternal copy only) and PWS-mUPD (two
+maternal copies). If the paternal chromosome is more methylated by d inside a domain, PWS-DEL
+and PWS-mUPD drop by about d/2 relative to the bins outside it and AS-DEL rises by d/2
+(`*_inside_minus_outside`). PWS-mUPD takes no part in finding the domains, so it is the
+independent check. It needs 07 from v6 on, which stores the PWS-mUPD combined values
+(`scaffold_combined` in `element_by_participant.tsv.gz`); rerun 07 (minutes), then 08.
+
+### What needs recomputing after a change
+
+| Change | Rerun |
+|---|---|
+| `DUPLICON_DOMAIN_START/END`, thresholds in 07 | `07_repeat_methylation.py` only (minutes), then 08 |
+| a new version of 08 or its GTF | `08_followup.py` only (`--skip-split-reads` if they were already counted: seconds) |
+| parameters of 05 (bin size, `P_SWITCH`), panel | `05_duplicon_breakpoints.py` only (minutes) |
+| a new or corrected BAM for one participant | `02 --samples X --force`, then 05 |
+| `WINDOW` | 01–03 with `--force`; 01–04 skip existing outputs, so without `--force` the old window is silently kept |
+
+To look at a region outside `WINDOW` (e.g. the proximal edge of one deletion) without
+redoing the main run, analyse a small window in its own folder and count only the reads
+aligned there (`--window-reads`: minutes per genome instead of hours):
+
+```bash
+export DUPLICON_OUT=results/08_duplicons_extra DUPLICON_WINDOW=chr15:16000000-18500000
+python3 scripts/duplicons/01_prepare_reference.py
+python3 scripts/duplicons/02_count_sunks.py --window-reads --samples <panel genomes>,<carrier>
+python3 scripts/duplicons/05_duplicon_breakpoints.py
+```
+
+Use `--window-reads` for every genome of that run (panel included): counts from reads
+aligned to the window and full-read counts must not be mixed in one run.
+
 ## What each step answers, and what to read first
 
 | Step | Question | Read first |
@@ -132,6 +189,26 @@ Steps 01–04 skip outputs that already exist (`--force` recomputes). Run analys
 | 03 | How much of BP1–BP5 did each haplotype assemble? Inversions? | `assembly/<sample>/<sample>.window_cover.tsv`, `*.junctions.tsv` |
 | 06 | Which repeats do the haplotypes carry, and how do they differ from CHM13? | `haplotype_repeats/cohort_sv_repeats.tsv` |
 | 07 | Is the methylation of repeat elements parent-of-origin specific? | `repeat_methylation/validation.tsv` |
+| 08 | For each deletion: confirmed, compatible or unresolved, and what is missing? Which regions differ by parent, and which genes are there? | `followup/breakpoint_status.tsv`, `followup/followup_report.md` |
+
+**What the real cohort showed (read this before 05's outputs).** Reads with copy-A SUNKs
+followed by copy-B SUNKs ("junction-like" reads) occur in the genomes with two copies of
+chr15 at similar rates to the carriers: paralog-specific variants of the 15q duplicons
+are polymorphic and gene conversion moves them between copies, so a normal chromosome
+can read as a "fusion" relative to CHM13. The HMM likewise switches copy number inside
+the duplicons of every genome. Therefore:
+- `breakpoints_vs_hificnv.tsv` takes the deletion as the CN=1 run overlapping the HiFiCNV
+  interval (runs separated only by bins inside that interval are joined) and reports its
+  two outer edges; it does not pick "the nearest 2->1 switch".
+- `nahr_test.tsv` tests only those two edges, and counts junction-like reads of that pair
+  whose crossover lies at the carrier's own edge, against the panel at the same position.
+- `junction_enrichment.tsv` reports, per carrier and pair, junction-like reads observed
+  vs expected from the panel rate; only an excess at a pair spanning the carrier's edges
+  is evidence. `junction_crossovers.tsv` (raw counts) is not evidence by itself.
+- `05b_breakpoint_summary.py` rebuilds these three tables from existing 05 outputs in
+  seconds. Confirm candidate crossovers independently: split-read alignments (SA tag)
+  when one side is unique sequence, and `assembly/<s>/<s>.junctions.tsv` (a contig of the
+  deleted chromosome jumping across the deletion).
 
 **Breakpoints (05) have two readouts.** *Junction reads* are single HiFi reads that
 carry copy-A SUNKs followed by copy-B SUNKs of one direct SD pair — the NAHR fusion
@@ -150,6 +227,13 @@ as the breakpoint; use copy number for events without junction reads.
 - The retained chromosome in PWS-DEL/AS-DEL comes from the parent in whom the
   deletion did not arise: it samples the population, not the predisposing allele.
   Predisposition (e.g. a BP2–BP3 inversion) needs the transmitting parent's DNA.
+- 07 calls a direct parent-of-origin element when the PWS-DEL and AS-DEL values do
+  not overlap and differ by >= 0.20. With 5 + 3 carriers, non-overlap arises by chance
+  for ~3.6 % of elements (2 of the 56 labellings), so 07 repeats the call for all 56
+  labellings of the carriers: `validation.tsv` reports the calls expected under
+  relabelling and a false-discovery estimate, `element_summary.tsv` the fraction of
+  labellings calling each element, and `direct_delta_by_region.tsv` 250-kb medians of
+  the difference against their permutation range (regional shifts).
 - 07 follows `scripts/analysis/README.md`: parental direction only from PWS-DEL minus
   AS-DEL inside the common CN=1 core; Control and DiGeorge contribute unoriented
   |H1 − H2|. IC-anchored orientations (`--ic-anchored`, `--contig-anchored`) are
@@ -158,8 +242,10 @@ as the breakpoint; use copy number for events without junction reads.
 
 ## Checks before interpreting
 
-- `WINDOW` (default chr15:19.0–32.5 Mb) must contain BP1–BP5 and every HiFiCNV
-  deletion interval, including the 14.25-Mb event.
+- `WINDOW` (default chr15:17.5–33.0 Mb) must contain BP1–BP5 and every HiFiCNV
+  deletion interval, including the 14.25-Mb event of 007P (17,592,000–31,842,000).
+  `00_check_inputs.py` stops the run if one does not fit. After changing it, rerun
+  01–03 with `--force` (the SUNK set and the extracted pieces depend on it).
 - `CONTROL_REGION` (default chr15:60–64 Mb) must be CN 2 and SD-free in all 17
   genomes.
 - In `scripts/analysis/01`, BP4 = 26.46 Mb and BP5 = 31.84 Mb fall outside the 15q13.3

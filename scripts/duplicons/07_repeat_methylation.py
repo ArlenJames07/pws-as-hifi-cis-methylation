@@ -29,13 +29,17 @@ never "observed"):
 
 Outputs: results/08_duplicons/repeat_methylation/
   element_by_participant.tsv.gz, element_summary.tsv, validation.tsv,
+  direct_delta_by_region.tsv (250-kb medians of the direct difference with the
+  label-permutation range),
   class_summary.tsv, repeat_methylation.{png,pdf}, analysis_manifest.json
 """
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
 import sys
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -73,6 +77,7 @@ MIN_BIPARENTAL = 3
 BOOTSTRAP_REPLICATES = 2_000
 CIRCULAR_SHIFTS = 2_000
 RANDOM_SEED = 20260925
+REGION_BIN_BP = 250_000            # regional median of the direct difference, tested by label permutation
 RUN_IC_ANCHORED_SENSITIVITY = False
 RUN_CONTIG_ANCHORED_SENSITIVITY = False
 
@@ -112,6 +117,54 @@ def bootstrap_difference(mat, pat, rng):
     m = np.median(mat[rng.integers(0, len(mat), (BOOTSTRAP_REPLICATES, len(mat)))], axis=1)
     p = np.median(pat[rng.integers(0, len(pat), (BOOTSTRAP_REPLICATES, len(pat)))], axis=1)
     return tuple(np.percentile(m - p, [2.5, 97.5]))
+
+
+def spearman(a: pd.Series, b: pd.Series) -> float:
+    """Spearman correlation without scipy: Pearson correlation of average ranks over the
+    pairs where both values are present (same result as scipy.stats.spearmanr)."""
+    ok = a.notna() & b.notna()
+    if ok.sum() < 3:
+        return np.nan
+    return float(a[ok].rank().corr(b[ok].rank()))
+
+
+def direct_calls(values, in_a, both_core, testable):
+    """Direct-design calls for one labelling of the deletion carriers.
+    values: elements x carriers; in_a: True for carriers labelled maternal-retained."""
+    a, b = values[:, in_a], values[:, ~in_a]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        raw = np.nanmedian(a, axis=1) - np.nanmedian(b, axis=1)
+        both = both_core & (np.isfinite(a).sum(axis=1) >= 1) & (np.isfinite(b).sum(axis=1) >= 1)
+        ok = both & testable & np.isfinite(raw)
+        offset = float(np.median(raw[ok])) if ok.any() else 0.0
+        delta = np.where(both, raw - offset, np.nan)
+        sep = both & ((np.nanmin(a, axis=1) > np.nanmax(b, axis=1)) | (np.nanmax(a, axis=1) < np.nanmin(b, axis=1)))
+    called = testable & sep & (np.abs(np.nan_to_num(delta)) >= EFFECT)
+    return called, delta, ok
+
+
+def label_permutations(mat, pat, both_core, testable, starts):
+    """Exact null for the direct design: every way of labelling len(pat) of the deletion
+    carriers as paternal-retained (C(8,3) = 56 with 5 PWS-DEL and 3 AS-DEL); the observed
+    labelling is one of them. Returns per-labelling call counts, per-element call
+    frequency and regional medians of the centred difference."""
+    values = np.column_stack([mat.to_numpy(), pat.to_numpy()])
+    n_a, n = mat.shape[1], mat.shape[1] + pat.shape[1]
+    bins = (starts // REGION_BIN_BP) * REGION_BIN_BP
+    ubins = np.unique(bins)
+    counts, freq, regional, observed_index = [], np.zeros(len(starts)), [], None
+    for k, chosen in enumerate(itertools.combinations(range(n), n - n_a)):
+        in_a = np.ones(n, bool)
+        in_a[list(chosen)] = False
+        called, delta, ok = direct_calls(values, in_a, both_core, testable)
+        counts.append(int(called.sum()))
+        freq += called
+        regional.append([float(np.median(delta[ok & (bins == b)])) if (ok & (bins == b)).any() else np.nan
+                         for b in ubins])
+        if list(chosen) == list(range(n_a, n)):
+            observed_index = k
+    return np.array(counts), freq / len(counts), ubins, np.array(regional), observed_index
 
 
 # --------------------------------------------------------------------- run
@@ -157,12 +210,19 @@ def run() -> dict[str, Path]:
             rows.append(pd.DataFrame({"element_id": el["element_id"], "sample_id": sample,
                                       "mechanism": mech, "measure": "abs_h1_minus_h2",
                                       "value": np.abs(v1 - v2), "n_cpg": np.minimum(n1, n2)}))
+            # combined methylation of biparental genomes and PWS-mUPD (the mUPD contrast in 08);
+            # without a combined track, the mean of the two haplotypes
             comb = load(sample, "combined")
-            if comb is not None and mech in BIPARENTAL:
+            if comb is not None:
                 vc, nc = element_means(*comb, starts, ends, DOMAIN_START, DOMAIN_END)
-                rows.append(pd.DataFrame({"element_id": el["element_id"], "sample_id": sample,
-                                          "mechanism": mech, "measure": "scaffold_combined",
-                                          "value": vc, "n_cpg": nc}))
+            else:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", RuntimeWarning)
+                    vc, nc = np.nanmean(np.vstack([v1, v2]), axis=0), n1 + n2
+                notes.append(f"{sample}: no combined track, mean of hap1/hap2 used")
+            rows.append(pd.DataFrame({"element_id": el["element_id"], "sample_id": sample,
+                                      "mechanism": mech, "measure": "scaffold_combined",
+                                      "value": vc, "n_cpg": nc}))
     long = pd.concat(rows, ignore_index=True)
     long.to_csv(OUTPUT_DIR / "element_by_participant.tsv.gz", sep="\t", index=False,
                 float_format="%.4f", na_rep="NA")
@@ -207,6 +267,29 @@ def run() -> dict[str, Path]:
                               np.where(S["delta_direct"] > 0, "maternal_higher", "paternal_higher"),
                               np.where(S["asm_candidate"] & ~S["in_common_core"],
                                        "asm_unoriented_outside_core", ""))
+    # ---- exact label-permutation null for the direct design
+    perm_counts, perm_freq, ubins, regional, obs_k = label_permutations(
+        mat, pat, S["in_common_core"].to_numpy(), S["testable"].to_numpy(), S["start"].to_numpy())
+    S["label_permutation_call_fraction"] = perm_freq
+    others = np.delete(perm_counts, obs_k) if obs_k is not None else perm_counts
+    obs_calls = int(S["direct_parent_of_origin"].sum())
+    perm_summary = {
+        "labellings": len(perm_counts),
+        "mean_calls_other_labellings": float(others.mean()) if others.size else np.nan,
+        "fdr_estimate": float(others.mean() / obs_calls) if obs_calls and others.size else np.nan,
+        "p_calls": float((np.sum(perm_counts >= obs_calls)) / len(perm_counts)),
+    }
+    reg = pd.DataFrame({"bin_start": ubins, "bin_end": ubins + REGION_BIN_BP,
+                        "observed_median_delta": regional[obs_k] if obs_k is not None else np.nan})
+    if obs_k is not None and len(perm_counts) > 1:
+        other = np.delete(regional, obs_k, axis=0)
+        reg["permutation_min"] = np.nanmin(other, axis=0)
+        reg["permutation_max"] = np.nanmax(other, axis=0)
+        with np.errstate(invalid="ignore"):
+            reg["permutation_p_two_sided"] = [
+                float((np.sum(np.abs(regional[:, j]) >= abs(regional[obs_k, j]))) / np.isfinite(regional[:, j]).sum())
+                if np.isfinite(regional[obs_k, j]) else np.nan for j in range(len(ubins))]
+    reg.to_csv(OUTPUT_DIR / "direct_delta_by_region.tsv", sep="\t", index=False, float_format="%.4g", na_rep="NA")
     S.reset_index().to_csv(OUTPUT_DIR / "element_summary.tsv", sep="\t", index=False,
                            float_format="%.4g", na_rep="NA")
 
@@ -222,7 +305,7 @@ def run() -> dict[str, Path]:
     null = np.array([agreement(np.roll(direct, rng.integers(10, len(V) - 10)))
                      for _ in range(CIRCULAR_SHIFTS)]) if cand.any() and len(V) > 20 else np.array([])
     p_value = (1 + np.sum(null >= observed)) / (1 + null.size) if null.size else np.nan
-    rho = V["asm_mean"].corr(V["delta_direct"].abs(), method="spearman") if len(V) > 5 else np.nan
+    rho = spearman(V["asm_mean"], V["delta_direct"].abs()) if len(V) > 5 else np.nan
     dpo = V[V["direct_parent_of_origin"]]
     validation = pd.DataFrame([
         ("parental offset removed (PWS-DEL minus AS-DEL, median over elements)", offset),
@@ -237,6 +320,10 @@ def run() -> dict[str, Path]:
         ("median |H1-H2| in PWS-mUPD at direct elements (expected low)", float(dpo["mupd_abs_h1_minus_h2"].median()) if len(dpo) else np.nan),
         ("median |H1-H2| in biparental genomes at direct elements (expected high)", float(dpo["asm_mean"].median()) if len(dpo) else np.nan),
         ("Spearman rho(ASM, |direct delta|)", rho),
+        ("label permutations of the deletion carriers (exact)", perm_summary["labellings"]),
+        ("direct calls expected under relabelling (mean of the other labellings)", perm_summary["mean_calls_other_labellings"]),
+        ("false discovery estimate (expected / observed direct calls)", perm_summary["fdr_estimate"]),
+        ("label-permutation p (fraction of labellings with >= observed calls)", perm_summary["p_calls"]),
     ], columns=["quantity", "value"])
     validation.to_csv(OUTPUT_DIR / "validation.tsv", sep="\t", index=False, float_format="%.4g")
 
@@ -262,7 +349,9 @@ def run() -> dict[str, Path]:
     (OUTPUT_DIR / "analysis_manifest.json").write_text(json.dumps(manifest, indent=2, default=str))
     for note in notes:
         print(f"[07] {note}", flush=True)
-    print(f"[07] {int(S['direct_parent_of_origin'].sum())} direct parent-of-origin elements; "
+    print(f"[07] {int(S['direct_parent_of_origin'].sum())} direct parent-of-origin elements "
+          f"(expected under relabelling {perm_summary['mean_calls_other_labellings']:.1f}, "
+          f"label-permutation p = {perm_summary['p_calls']:.3g}); "
           f"ASM agreement {observed:.2f} (circular-shift p = {p_value:.3g})", flush=True)
     return {"summary": OUTPUT_DIR / "element_summary.tsv", "validation": OUTPUT_DIR / "validation.tsv"}
 
