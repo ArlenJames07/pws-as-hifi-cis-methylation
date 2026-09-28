@@ -1,1974 +1,542 @@
 #!/usr/bin/env python3
 """
-Self-contained Figure 5 generator for the hifi_multiomics_pipeline layout.
+Figure 5 -- Structural definition of 15q11-q13 deletion classes and breakpoint-proximal context.
 
-This script keeps the original Figure 5 outputs intact and creates a second,
-reviewer-oriented version that separates:
-1. chr15 deletion architecture,
-2. non-chr15 genome-wide burden,
-3. genome-wide SV burden,
-4. breakpoint-coordinate-aligned methylation distance-decay,
-5. compact methylation effect-size summaries.
+Built from the new outputs of scripts/analysis and scripts/duplicons (plus HiFiCNV/pbsv VCFs):
+  a  paralog-specific copy number (SUNK k-mers, 5-kb bins; scripts/duplicons 05) across
+     chr15:17.5-33 Mb for every deletion carrier and PWS-mUPD, with the best available edges
+     (figlib/deletions.py: assembled contig > contig junction > SUNK > HiFiCNV), the HiFiCNV
+     edges (analysis 01) and the class and breakpoint status (duplicons 08)
+  b  how far each edge moved from the HiFiCNV call, by the evidence that placed it
+  c  pbsv PASS structural variants per genome, by group
+  d  genome-wide HiFiCNV calls >= 2 Mb; the defining lesion of each genome (chr15 deletion over
+     the imprinting centre, largest chr22 deletion of a 22q11.2DS genome) is outlined and left
+     out of the burden test
+  e  CpG methylation (pb-CpG-tools) in 10-100 kb bins on both sides of each edge, measured from
+     the edge of unique sequence (an edge inside a segmental duplication is anchored at the
+     duplication boundary; duplication CpGs excluded), minus the biparental mean
+  f  near (<= 25 kb) minus far (50-100 kb) |difference| per group and side; bootstrap interval
+     over carriers, exact sign-flip test
+
+Usage: python3 scripts/figures/FIGURE_5.py [--results DIR] [--render-only]
 """
-
 from __future__ import annotations
 
 import argparse
-import itertools
-import math
-import os
-import subprocess
-from dataclasses import dataclass
+import json
+import sys
 from pathlib import Path
-from typing import Iterable, Iterator, Optional, Sequence
 
-os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
-
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
-from matplotlib.lines import Line2D
-from matplotlib.patches import Rectangle
-from scipy import stats
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from figlib import annotation as ann  # noqa: E402
+from figlib import cohort as cohort_lib  # noqa: E402
+from figlib import deletions  # noqa: E402
+from figlib import paths as paths_lib  # noqa: E402
+from figlib import readers  # noqa: E402
+from figlib import stats  # noqa: E402
+from figlib import style  # noqa: E402
+from figlib.style import mb  # noqa: E402
+
+import matplotlib.pyplot as plt  # noqa: E402
+from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec  # noqa: E402
+from matplotlib.lines import Line2D  # noqa: E402
+
+CHROM = ann.CHROM
+PLOT = (17_500_000, 33_000_000)
+CNV_MIN = 2_000_000
+FLANK_BINS = ((0, 10_000), (10_000, 25_000), (25_000, 50_000), (50_000, 100_000))
+NEAR_MAX, FAR_MIN = 25_000, 50_000
+MIN_CPG_BIN = 5
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_OUTDIR = PROJECT_ROOT / "results" / "07_figures" / "figure_5"
-DEFAULT_FASTA = Path("/home/rare/arlen/reference/chm13v22.fasta")
-DEFAULT_GTF = Path("/home/rare/arlen/reference/chm13v22.sorted.gtf")
-
-REQUIRED_INPUT_TABLES = [
-    "Figure5A_deletion_breakpoint_characterization.tsv",
-    "Figure5A_haplotype_coverage_tracks.tsv.gz",
-    "Figure5B_genomewide_cnv_calls.tsv.gz",
-    "Figure5C_sv_calls.tsv.gz",
-    "Figure5C_sv_burden_by_sample.tsv",
-    "Figure5D_breakpoint_flanking_methylation_profile.tsv.gz",
-]
-
-COHORT = [
-    ("001P", "Prader-Willi syndrome", "PWS_DEL"),
-    ("002P", "Prader-Willi syndrome", "PWS_DEL"),
-    ("005P", "Prader-Willi syndrome", "PWS_DEL"),
-    ("006P", "Prader-Willi syndrome", "PWS_DEL"),
-    ("007P", "Prader-Willi syndrome", "PWS_DEL"),
-    ("004P", "Prader-Willi syndrome", "PWS_mUPD"),
-    ("008D", "DiGeorge syndrome", "DIGEORGE"),
-    ("009D", "DiGeorge syndrome", "DIGEORGE"),
-    ("010D", "DiGeorge syndrome", "DIGEORGE"),
-    ("011D", "DiGeorge syndrome", "DIGEORGE"),
-    ("012D", "DiGeorge syndrome", "DIGEORGE"),
-    ("015D", "DiGeorge syndrome", "DIGEORGE"),
-    ("013A", "Angelman syndrome", "AS_DEL"),
-    ("014A", "Angelman syndrome", "AS_DEL"),
-    ("016A", "Angelman syndrome", "AS_DEL"),
-    ("017C", "Unaffected control", "CONTROL"),
-    ("018C", "Unaffected control", "CONTROL"),
-]
-
-CHROM = "chr15"
-PLOT_START = 17_000_000
-PLOT_END = 33_000_000
-PANEL_GROUP_ORDER = ["PWS_DEL", "AS_DEL", "PWS_mUPD", "DIGEORGE", "CONTROL"]
-GROUP_LABEL = {
-    "PWS_DEL": "PWS-DEL",
-    "AS_DEL": "AS-DEL",
-    "PWS_mUPD": "PWS-UPD",
-    "DIGEORGE": "DiGeorge",
-    "CONTROL": "Control",
-}
-METH_GROUP_LABEL = {
-    "PWS_DEL": "PWS-DEL",
-    "AS_DEL": "AS-DEL",
-    "PWS_mUPD": "PWS-UPD BP-matched",
-}
-SAMPLE_DISPLAY_PREFIX = {
-    "PWS_DEL": "PW",
-    "AS_DEL": "AS",
-    "PWS_mUPD": "UPD",
-    "DIGEORGE": "DG",
-    "CONTROL": "CTRL",
-}
-GROUP_COLORS = {
-    "PWS_DEL": "#c03a3a",
-    "AS_DEL": "#2f6fb0",
-    "PWS_mUPD": "#7a52b3",
-    "DIGEORGE": "#d89000",
-    "CONTROL": "#4d4d4d",
-}
-GROUP_FILLS = {
-    "PWS_DEL": "#f4c7c7",
-    "AS_DEL": "#cfe0f4",
-    "PWS_mUPD": "#e1d5f5",
-    "DIGEORGE": "#f7dfac",
-    "CONTROL": "#d9d9d9",
-}
-SV_METRIC_COLORS = {
-    "DEL": "#c03a3a",
-    "INS": "#4c78a8",
-    "DUP": "#e08b32",
-    "INV": "#7a52b3",
-    "BND": "#5a5a5a",
-    "TOTAL_COUNT": "#222222",
-    "TOTAL_SPAN_MB": "#8c564b",
-}
-BREAKPOINTS_MB = {
-    "BP1": 20.94,
-    "BP2": 21.07,
-    "BP3": 26.05,
-    "BP4": 26.46,
-    "BP5": 31.84,
-}
-PANEL_A_BREAKPOINTS = {
-    "BP1": 20_940_000,
-    "BP2": 21_070_000,
-    "BP3": 26_050_000,
-    "BP4": 26_460_000,
-    "BP5": 31_840_000,
-}
-DISTANCE_BINS = [
-    ("0-10 kb", 0, 10_000),
-    ("10-25 kb", 10_000, 25_000),
-    ("25-50 kb", 25_000, 50_000),
-    ("50-100 kb", 50_000, 100_000),
-]
-BP12_GENE_ORDER = ["NIPA1", "NIPA2", "CYFIP1", "TUBGCP5"]
-PWS_CORE_GENE_ORDER = ["MKRN3", "MAGEL2", "NDN", "SNRPN", "SNORD116", "IPW", "SNORD115", "UBE3A", "GABRB3"]
-EXTRA_007P_FIGURE_GENES = ["APBA2", "TJP1", "FAN1", "TRPM1", "OTUD7A", "CHRNA7", "FMN1", "RYR3", "AVEN"]
-SNORD_CLUSTER_PREFIXES = {"SNORD116", "SNORD115"}
-PANEL_A_COLORS = {
-    "total": "#404040",
-    "hap1": "#1B9E77",
-    "hap2": "#D95F02",
-    "unphased": "#BDBDBD",
-    "deleted_pws": "#FDEDEC",
-    "deleted_as": "#EAF2FB",
-    "boundary_pws": "#C0392B",
-    "boundary_as": "#2471A3",
-    "canonical_bp": "#8B6914",
-    "extended_bp": "#B08968",
-    "core_gene": "#1F4E79",
-    "extra_gene": "#8C3D1E",
-    "core_gene_fill": "#DCEAF6",
-    "extra_gene_fill": "#F7E1D6",
-}
-
-
-@dataclass(frozen=True)
-class SampleInfo:
-    sample_id: str
-    syndrome: str
-    group: str
-    methylation_combined: Optional[Path]
-    methylation_hap1: Optional[Path]
-    methylation_hap2: Optional[Path]
-
-
-@dataclass(frozen=True)
-class GeneInterval:
-    name: str
-    start: int
-    end: int
-    strand: str
-
-
-def ensure_dir(path: Path) -> Path:
-    path.mkdir(parents=True, exist_ok=True)
-    return path
-
-
-def missing_input_tables(table_dir: Path) -> list[Path]:
-    return [table_dir / name for name in REQUIRED_INPUT_TABLES if not (table_dir / name).exists()]
-
-
-def resolve_input_table_dir(outdir: Path, requested_table_dir: Path | None = None) -> Path:
-    candidates = [requested_table_dir] if requested_table_dir is not None else [outdir / "tables"]
-    checked: list[Path] = []
-    for candidate in candidates:
-        if candidate is None:
-            continue
-        candidate = candidate.expanduser().resolve()
-        checked.append(candidate)
-        if not missing_input_tables(candidate):
-            return candidate
-    details = "\n".join(f"- {path}" for path in checked)
-    raise FileNotFoundError(
-        "Figure 5 input tables were not found. Pass --table-dir to a directory containing "
-        "the required Figure5*.tsv inputs, or place them in OUTDIR/tables.\n"
-        f"Checked:\n{details}"
-    )
-
-
-def build_sample_display_labels() -> dict[str, str]:
-    labels: dict[str, str] = {}
-    counts: dict[str, int] = {}
-    for sample_id, _syndrome, group in COHORT:
-        counts[group] = counts.get(group, 0) + 1
-        labels[sample_id] = f"{SAMPLE_DISPLAY_PREFIX[group]}-{counts[group]}"
-    return labels
-
-
-DISPLAY_SAMPLE_LABELS = build_sample_display_labels()
-GROUP_N = {
-    group: sum(1 for _sid, _syn, g in COHORT if g == group)
-    for group in PANEL_GROUP_ORDER
-}
-
-
-def load_input_inventory(path: Path) -> dict[str, SampleInfo]:
-    df = pd.read_csv(path, sep="\t")
-    samples: dict[str, SampleInfo] = {}
-    for _, row in df.iterrows():
-        group = str(row["group"]).replace("-", "_").upper()
-        group = {"PWS_UPD": "PWS_mUPD", "CONTROL": "CONTROL"}.get(group, group)
-        group = row["group"]
-        if group == "PWS-DEL":
-            group = "PWS_DEL"
-        elif group == "AS-DEL":
-            group = "AS_DEL"
-        elif group == "PWS-UPD":
-            group = "PWS_mUPD"
-        elif group in {"DiGeorge", "DIGEORGE", "22q11.2 deletion"}:
-            group = "DIGEORGE"
-        elif group == "Control":
-            group = "CONTROL"
-        samples[str(row["sample_id"])] = SampleInfo(
-            sample_id=str(row["sample_id"]),
-            syndrome=str(row["syndrome"]),
-            group=group,
-            methylation_combined=Path(row["methylation_combined"]) if str(row["methylation_combined"]).strip() else None,
-            methylation_hap1=Path(row["methylation_hap1"]) if str(row["methylation_hap1"]).strip() else None,
-            methylation_hap2=Path(row["methylation_hap2"]) if str(row["methylation_hap2"]).strip() else None,
-        )
-    return samples
-
-
-def parse_group(group: str) -> str:
-    if group in GROUP_LABEL:
-        return group
-    if group == "PWS-DEL":
-        return "PWS_DEL"
-    if group == "AS-DEL":
-        return "AS_DEL"
-    if group == "PWS-UPD":
-        return "PWS_mUPD"
-    if str(group).upper().replace("-", "") in {"DIGEORGE", "22Q11.2DELETION", "22Q11DELETION"}:
-        return "DIGEORGE"
-    if group == "Control":
-        return "CONTROL"
-    return group
-
-
-def format_pvalue(value: float) -> str:
-    if not np.isfinite(value):
-        return "n/a"
-    if value < 1e-3:
-        return f"{value:.1e}"
-    return f"{value:.3f}"
-
-
-def format_effect(value: float) -> str:
-    if not np.isfinite(value):
-        return "n/a"
-    return f"{value:+.3f}"
-
-
-def weighted_average(values: pd.Series, weights: pd.Series) -> float:
-    mask = values.notna() & weights.notna() & (weights > 0)
-    if not mask.any():
-        return np.nan
-    return float(np.average(values[mask], weights=weights[mask]))
-
-
-def bootstrap_ci(values: Sequence[float], n_boot: int = 5000, seed: int = 13) -> tuple[float, float]:
-    arr = np.asarray([v for v in values if np.isfinite(v)], dtype=float)
-    if len(arr) < 2:
-        return np.nan, np.nan
-    rng = np.random.default_rng(seed)
-    draws = rng.choice(arr, size=(n_boot, len(arr)), replace=True)
-    means = draws.mean(axis=1)
-    return float(np.quantile(means, 0.025)), float(np.quantile(means, 0.975))
-
-
-def bh_adjust(pvalues: Sequence[float]) -> np.ndarray:
-    arr = np.asarray(pvalues, dtype=float)
-    q = np.full(len(arr), np.nan, dtype=float)
-    valid = np.isfinite(arr)
-    if not valid.any():
-        return q
-    sub = arr[valid]
-    order = np.argsort(sub)
-    ranked = np.empty_like(sub)
-    prev = 1.0
-    m = len(sub)
-    for j, idx in enumerate(order[::-1], start=1):
-        raw = sub[idx] * m / (m - j + 1)
-        prev = min(prev, raw)
-        ranked[idx] = prev
-    q[valid] = ranked
-    return q
-
-
-def kruskal_h(values: Sequence[float], labels: Sequence[str]) -> float:
-    vals = np.asarray(values, dtype=float)
-    labs = np.asarray(labels)
-    ranks = stats.rankdata(vals, method="average")
-    unique_labels = []
-    groups = []
-    for label in labs:
-        if label not in unique_labels:
-            unique_labels.append(label)
-            groups.append(np.where(labs == label)[0])
-    n = len(vals)
-    h = (12.0 / (n * (n + 1.0))) * sum((ranks[idx].sum() ** 2) / len(idx) for idx in groups) - 3.0 * (n + 1.0)
-    _, counts = np.unique(vals, return_counts=True)
-    if n > 1:
-        tie = 1.0 - ((counts**3 - counts).sum() / float(n**3 - n))
-        if tie > 0:
-            h /= tie
-    return float(h)
-
-
-def iter_group_partitions(indices: tuple[int, ...], group_sizes: Sequence[int]) -> Iterator[list[tuple[int, ...]]]:
-    if len(group_sizes) == 1:
-        yield [indices]
-        return
-    first = group_sizes[0]
-    for combo in itertools.combinations(indices, first):
-        remaining = tuple(idx for idx in indices if idx not in combo)
-        for tail in iter_group_partitions(remaining, group_sizes[1:]):
-            yield [tuple(combo)] + tail
-
-
-def permutation_kruskal(
-    values: Sequence[float],
-    labels: Sequence[str],
-    max_exact_partitions: int = 100_000,
-    monte_carlo_permutations: int = 100_000,
-) -> tuple[float, float, str, int]:
-    """Reproducible Kruskal-Wallis permutation test.
-
-    Enumerate all label partitions for small cohorts. For the 17-sample cohort,
-    which includes six DiGeorge samples, use a fixed-seed Monte Carlo test so
-    the analysis remains computationally practical and reproducible.
-    """
-    vals = np.asarray(values, dtype=float)
-    labs = np.asarray(labels)
-    first_seen: list[str] = []
-    group_sizes: list[int] = []
-    for label in labs:
-        if label not in first_seen:
-            first_seen.append(label)
-            group_sizes.append(int((labs == label).sum()))
-    observed = kruskal_h(vals, labs)
-    n_partitions = math.factorial(len(vals)) // math.prod(math.factorial(size) for size in group_sizes)
-    if n_partitions > max_exact_partitions:
-        rng = np.random.default_rng(1729)
-        ge = 0
-        for _ in range(monte_carlo_permutations):
-            stat = kruskal_h(vals, rng.permutation(labs))
-            ge += int(stat >= observed - 1e-12)
-        pvalue = (ge + 1) / float(monte_carlo_permutations + 1)
-        return observed, pvalue, "Monte Carlo permutation (seed=1729)", monte_carlo_permutations
-
-    ge = 0
-    total = 0
-    index_order = tuple(range(len(vals)))
-    for groups in iter_group_partitions(index_order, group_sizes):
-        perm_labels = np.empty(len(vals), dtype=object)
-        for label, group_idx in zip(first_seen, groups):
-            for idx in group_idx:
-                perm_labels[idx] = label
-        stat = kruskal_h(vals, perm_labels)
-        ge += int(stat >= observed - 1e-12)
-        total += 1
-    return observed, ge / float(total), "exact permutation", total
-
-
-def epsilon_squared(h_stat: float, n: int, k: int) -> float:
-    if n <= k:
-        return np.nan
-    return max(0.0, float((h_stat - k + 1.0) / (n - k)))
-
-
-def exact_sign_flip_pvalue(differences: Sequence[float]) -> float:
-    diffs = np.asarray([d for d in differences if np.isfinite(d)], dtype=float)
-    n = len(diffs)
-    if n < 2:
-        return np.nan
-    observed = abs(diffs.mean())
-    ge = 0
-    total = 0
-    for bits in itertools.product([-1.0, 1.0], repeat=n):
-        signed = diffs * np.asarray(bits, dtype=float)
-        ge += int(abs(signed.mean()) >= observed - 1e-12)
-        total += 1
-    return ge / float(total)
-
-
-def exact_rank_sum_pvalue(left: Sequence[float], right: Sequence[float]) -> float:
-    left_vals = np.asarray([v for v in left if np.isfinite(v)], dtype=float)
-    right_vals = np.asarray([v for v in right if np.isfinite(v)], dtype=float)
-    if len(left_vals) == 0 or len(right_vals) == 0:
-        return np.nan
-    combined = np.concatenate([left_vals, right_vals])
-    ranks = stats.rankdata(combined, method="average")
-    n_left = len(left_vals)
-    observed = abs(ranks[:n_left].mean() - ranks[n_left:].mean())
-    ge = 0
-    total = 0
-    for left_idx in itertools.combinations(range(len(combined)), n_left):
-        mask = np.zeros(len(combined), dtype=bool)
-        mask[list(left_idx)] = True
-        stat = abs(ranks[mask].mean() - ranks[~mask].mean())
-        ge += int(stat >= observed - 1e-12)
-        total += 1
-    return ge / float(total)
-
-
-def read_region_bed(
-    path: Optional[Path],
-    chrom: str,
-    start: int,
-    end: int,
-    meth_col_1based: int = 9,
-    cov_col_1based: int = 6,
-) -> pd.DataFrame:
-    if path is None or not path.exists():
-        return pd.DataFrame(columns=["chrom", "start", "end", "mid", "meth", "coverage"])
-    proc = subprocess.run(
-        [
-            "awk",
-            "-v",
-            f"chrom={chrom}",
-            "-v",
-            f"start={start}",
-            "-v",
-            f"end={end}",
-            '$1==chrom && $2>=start && $2<end {print}',
-            str(path),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=240,
-    )
+# ------------------------------------------------------------------ a, b: copy number and edges
+def cn_strips(paths, samples: list[str]) -> tuple[pd.DataFrame, str]:
+    """5-kb paralog-specific copy number (duplicons 05), else HiFiCNV copy number in 5-kb bins."""
+    path = paths.duplicons / "breakpoints" / "sunk15q.bins.tsv"
+    if path.is_file():
+        b = pd.read_csv(path, sep="\t", usecols=["sample", "start", "end", "cn_norm", "usable", "state"], low_memory=False)
+        b = b[b["sample"].isin(samples)].rename(columns={"sample": "sample_id"})
+        b["usable"] = b["usable"].astype(str).isin(["True", "true", "1"])
+        return b, "SUNK copy number (scripts/duplicons 05)"
     rows = []
-    meth_idx = meth_col_1based - 1
-    cov_idx = cov_col_1based - 1
-    for line in proc.stdout.splitlines():
-        fields = line.split()
-        if len(fields) <= max(2, meth_idx, cov_idx):
+    bins = np.arange(PLOT[0], PLOT[1], 5_000)
+    for s in samples:
+        cn = readers.sample_files(paths.cnv, s, ("*.copynum.bedgraph", "*.copynum.bedgraph.gz"))
+        if not cn:
             continue
-        try:
-            start0 = int(float(fields[1]))
-            end0 = int(float(fields[2]))
-            coverage = float(fields[cov_idx])
-            meth = float(fields[meth_idx])
-        except Exception:
-            continue
-        if meth > 1.5:
-            meth /= 100.0
-        rows.append(
-            {
-                "chrom": fields[0],
-                "start": start0,
-                "end": end0,
-                "mid": int((start0 + end0) / 2),
-                "meth": min(1.0, max(0.0, meth)),
-                "coverage": coverage,
-            }
-        )
+        seg = readers.hificnv_copynum(cn[0], CHROM)
+        val = np.full(len(bins), np.nan)
+        for r in seg.itertuples(index=False):
+            val[(bins + 2_500 >= r.start) & (bins + 2_500 < r.end)] = r.copy_number
+        rows.append(pd.DataFrame({"sample_id": s, "start": bins, "end": bins + 5_000, "cn_norm": val,
+                                  "usable": np.isfinite(val), "state": val}))
+    return (pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()), "HiFiCNV copy number (no SUNK table)"
+
+
+def edge_shifts(dels: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    for r in dels.itertuples(index=False):
+        for edge, pos, h, src in (("proximal", r.start, r.hificnv_start, r.start_source),
+                                  ("distal", r.end, r.hificnv_end, r.end_source)):
+            kind = ("assembled contig" if str(src).startswith("assembled") else
+                    "contig junction" if str(src).startswith("contig junction") else
+                    "SUNK copy number" if str(src).startswith("SUNK") else "HiFiCNV")
+            rows.append({"sample_id": r.sample_id, "label": r.label, "group": r.group, "edge": edge,
+                         "refined": pos, "hificnv": h, "shift_kb": (pos - h) / 1e3 if np.isfinite(pos) and np.isfinite(h) else np.nan,
+                         "evidence": kind, "source": src})
     return pd.DataFrame(rows)
 
 
-def resolve_retained_track(
-    sample_id: str,
-    group: str,
-    rq1_labels: pd.DataFrame,
-    phase2_labels: pd.DataFrame,
-) -> str:
-    if group not in {"PWS_DEL", "AS_DEL"}:
-        return "combined"
-    if not rq1_labels.empty and {"sample", "layer", "allele_label"}.issubset(rq1_labels.columns):
-        subset = rq1_labels[rq1_labels["sample"].astype(str) == sample_id]
-        if not subset.empty:
-            for _, row in subset.iterrows():
-                label = str(row["allele_label"]).lower()
-                if group == "PWS_DEL" and "retained_maternal" in label:
-                    return str(row["layer"])
-                if group == "AS_DEL" and "retained_paternal" in label:
-                    return str(row["layer"])
-    if not phase2_labels.empty and {"sample", "haplotype1_label", "haplotype2_label"}.issubset(phase2_labels.columns):
-        subset = phase2_labels[phase2_labels["sample"].astype(str) == sample_id]
-        if not subset.empty:
-            row = subset.iloc[0]
-            if group == "PWS_DEL" and "retained_maternal" in str(row["haplotype1_label"]).lower():
-                return "hap1"
-            if group == "PWS_DEL" and "retained_maternal" in str(row["haplotype2_label"]).lower():
-                return "hap2"
-            if group == "AS_DEL" and "retained_paternal" in str(row["haplotype1_label"]).lower():
-                return "hap1"
-            if group == "AS_DEL" and "retained_paternal" in str(row["haplotype2_label"]).lower():
-                return "hap2"
-    return "combined"
-
-
-def load_chrom_sizes(fasta: Path) -> pd.DataFrame:
-    fai = Path(str(fasta) + ".fai")
-    rows = []
-    with open(fai) as handle:
-        for line in handle:
-            fields = line.rstrip("\n").split("\t")
-            chrom = fields[0]
-            if chrom.startswith("chr") and (chrom[3:].isdigit() or chrom in {"chrX", "chrY"}):
-                rows.append({"chrom": chrom, "length": int(fields[1])})
-    order = {f"chr{i}": i for i in range(1, 23)}
-    order.update({"chrX": 23, "chrY": 24})
-    df = pd.DataFrame(rows)
-    df["order"] = df["chrom"].map(order)
-    return df.dropna(subset=["order"]).sort_values("order").reset_index(drop=True)
-
-
-def parse_gtf_attrs(attr: str) -> dict[str, str]:
-    out = {}
-    for part in attr.strip().split(";"):
-        part = part.strip()
-        if not part:
+# ------------------------------------------------------------------ b, c: CNV and SV burden
+def cnv_calls(paths, cohort) -> tuple[pd.DataFrame, list[str]]:
+    rows, notes = [], []
+    for s in cohort.samples:
+        files = [f for f in readers.sample_files(paths.cnv, s, ("*.vcf.gz", "*.vcf")) if "hificnv" in f.name.lower()] \
+            or readers.sample_files(paths.cnv, s, ("*.vcf.gz", "*.vcf"))
+        if not files:
+            notes.append(f"{s}: no HiFiCNV VCF")
             continue
-        if " " in part:
-            key, val = part.split(" ", 1)
-            out[key] = val.strip().strip('"')
-        elif "=" in part:
-            key, val = part.split("=", 1)
-            out[key] = val.strip().strip('"')
-    return out
-
-
-def load_chr15_gene_catalog(gtf_path: Path, chrom: str = CHROM) -> pd.DataFrame:
-    rows = []
-    if not gtf_path.exists():
-        return pd.DataFrame(columns=["gene_name", "start", "end", "strand"])
-    seen_target = False
-    with open(gtf_path) as handle:
-        for line in handle:
-            if line.startswith("#"):
-                continue
-            fields = line.rstrip("\n").split("\t")
-            if len(fields) < 9:
-                continue
-            if fields[0] == chrom:
-                seen_target = True
-            elif seen_target:
-                break
-            else:
-                continue
-            if fields[2] != "gene":
-                continue
-            attrs = parse_gtf_attrs(fields[8])
-            gene_name = attrs.get("gene") or attrs.get("gene_name") or attrs.get("gene_id")
-            if not gene_name:
-                continue
-            rows.append(
-                {
-                    "gene_name": gene_name,
-                    "start": int(fields[3]),
-                    "end": int(fields[4]),
-                    "strand": fields[6],
-                }
-            )
-    return pd.DataFrame(rows).sort_values(["start", "end", "gene_name"]).reset_index(drop=True)
-
-
-def build_gene_interval(gene_catalog: pd.DataFrame, name: str) -> Optional[GeneInterval]:
-    if gene_catalog.empty:
-        return None
-    if name in SNORD_CLUSTER_PREFIXES:
-        sub = gene_catalog[gene_catalog["gene_name"].astype(str).str.startswith(name)].copy()
-    else:
-        sub = gene_catalog[gene_catalog["gene_name"].eq(name)].copy()
-    if sub.empty:
-        return None
-    strand_mode = sub["strand"].mode()
-    return GeneInterval(
-        name=name,
-        start=int(sub["start"].min()),
-        end=int(sub["end"].max()),
-        strand=str(strand_mode.iat[0]) if not strand_mode.empty else ".",
-    )
-
-
-def build_gene_track(gene_catalog: pd.DataFrame, ordered_names: Sequence[str]) -> list[GeneInterval]:
-    genes = []
-    for name in ordered_names:
-        gene = build_gene_interval(gene_catalog, name)
-        if gene is not None:
-            genes.append(gene)
-    return genes
-
-
-def assign_gene_rows(genes: Sequence[GeneInterval], pad_bp: int) -> list[tuple[GeneInterval, int]]:
-    row_ends: list[int] = []
-    placements: list[tuple[GeneInterval, int]] = []
-    for gene in sorted(genes, key=lambda item: (item.start, item.end, item.name)):
-        for row_idx, last_end in enumerate(row_ends):
-            if gene.start > last_end + pad_bp:
-                row_ends[row_idx] = gene.end
-                placements.append((gene, row_idx))
-                break
+        c = readers.hificnv_calls(files[0])
+        c.insert(0, "sample_id", s)
+        c.insert(1, "group", cohort.group(s))
+        rows.append(c)
+    calls = pd.concat(rows, ignore_index=True) if rows else pd.DataFrame(
+        columns=["sample_id", "group", "chrom", "start", "end", "size_bp", "svtype", "copy_number"])
+    calls["defining_lesion"] = False
+    for s, d in calls.groupby("sample_id"):
+        g = cohort.group(s)
+        if g in cohort_lib.DELETIONS:
+            hit = d[(d["chrom"] == CHROM) & (d["svtype"] == "DEL") & (d["start"] < ann.IC[1]) & (d["end"] > ann.IC[0])]
+        elif g == "DiGeorge":
+            hit = d[(d["chrom"] == "chr22") & (d["svtype"] == "DEL") & (d["size_bp"] >= 1_500_000)]
+            hit = hit.nlargest(1, "size_bp")
         else:
-            row_ends.append(gene.end)
-            placements.append((gene, len(row_ends) - 1))
-    return placements
+            hit = d.iloc[0:0]
+        calls.loc[hit.index, "defining_lesion"] = True
+    return calls, notes
 
 
-def add_panel_a_breakpoint_guides(ax: plt.Axes, label_names: Sequence[str] = ()) -> None:
-    for bp_name, bp_pos in PANEL_A_BREAKPOINTS.items():
-        is_canonical = bp_name in {"BP1", "BP2", "BP3"}
-        ax.axvline(
-            bp_pos / 1e6,
-            color=PANEL_A_COLORS["canonical_bp"] if is_canonical else PANEL_A_COLORS["extended_bp"],
-            linestyle=":" if is_canonical else "--",
-            linewidth=0.75 if is_canonical else 0.65,
-            alpha=0.85 if is_canonical else 0.55,
-            zorder=0,
-        )
-    y_offsets = {"BP1": 1.04, "BP2": 1.18, "BP3": 1.04, "BP4": 1.04, "BP5": 1.04}
-    x_offsets = {"BP1": -7, "BP2": 7, "BP3": 0, "BP4": 0, "BP5": 0}
-    x_align = {"BP1": "right", "BP2": "left", "BP3": "center", "BP4": "center", "BP5": "center"}
-    for bp_name in label_names:
-        if bp_name not in PANEL_A_BREAKPOINTS:
+def sv_burden(paths, cohort) -> tuple[pd.DataFrame, list[str]]:
+    rows, notes = [], []
+    for s in cohort.samples:
+        f = readers.sample_files(paths.sv_calls, s, ("*.sv.pass.vcf.gz", "*.vcf.gz")) or \
+            readers.sample_files(paths.phasing, s, ("*.sv.phased.vcf.gz",))
+        if not f:
+            notes.append(f"{s}: no pbsv VCF")
             continue
-        is_canonical = bp_name in {"BP1", "BP2", "BP3"}
-        ax.annotate(
-            bp_name,
-            xy=(PANEL_A_BREAKPOINTS[bp_name] / 1e6, y_offsets.get(bp_name, 1.04)),
-            xycoords=ax.get_xaxis_transform(),
-            xytext=(x_offsets.get(bp_name, 0), 0),
-            textcoords="offset points",
-            ha=x_align.get(bp_name, "center"),
-            va="bottom",
-            fontsize=6.5,
-            color=PANEL_A_COLORS["canonical_bp"] if is_canonical else PANEL_A_COLORS["extended_bp"],
-            fontweight="bold",
-        )
+        rows.append({"sample_id": s, "group": cohort.group(s), "source": f[0].name, **readers.sv_counts(f[0])})
+    return pd.DataFrame(rows), notes
 
 
-def plot_panel_a_gene_axis(
-    ax: plt.Axes,
-    genes: Sequence[GeneInterval],
-    line_color: str,
-    fill_color: str,
-    label_names: Sequence[str],
-) -> None:
-    placements = assign_gene_rows(genes, pad_bp=250_000)
-    max_row = max((row_idx for _, row_idx in placements), default=0)
-    label_fontsize = 4.0 if max_row >= 3 else 4.8
-    for gene, row_idx in placements:
-        y = float(max_row - row_idx)
-        start_mb = gene.start / 1e6
-        end_mb = gene.end / 1e6
-        width_mb = max(end_mb - start_mb, 0.008)
-        ax.add_patch(
-            Rectangle(
-                (start_mb, y - 0.18),
-                width_mb,
-                0.36,
-                facecolor=fill_color,
-                edgecolor=line_color,
-                linewidth=0.85,
-                alpha=0.9,
-                zorder=2,
-            )
-        )
-        if gene.name in SNORD_CLUSTER_PREFIXES or gene.strand not in {"+", "-"}:
-            ax.plot([start_mb, end_mb], [y, y], color=line_color, linewidth=1.2, zorder=3)
-        else:
-            x0, x1 = (start_mb, end_mb) if gene.strand == "+" else (end_mb, start_mb)
-            ax.annotate(
-                "",
-                xy=(x1, y),
-                xytext=(x0, y),
-                arrowprops=dict(arrowstyle="-|>", lw=1.1, color=line_color, shrinkA=0, shrinkB=0),
-                zorder=4,
-            )
-        ax.text(
-            start_mb + width_mb / 2.0,
-            y + 0.18,
-            gene.name,
-            ha="center",
-            va="bottom",
-            fontsize=label_fontsize,
-            color=line_color,
-            fontweight="bold",
-            zorder=5,
-        )
-    add_panel_a_breakpoint_guides(ax, label_names=label_names)
-    ax.set_ylim(-0.45, max_row + 0.82)
-    ax.set_xlim(PLOT_START / 1e6, PLOT_END / 1e6)
-    ax.set_yticks([])
-    ax.tick_params(axis="x", labelbottom=False, length=2)
-    ax.spines[["left", "right", "top"]].set_visible(False)
-
-
-def panel_a_deletion_label(row: pd.Series) -> str:
-    deletion_type = str(row.get("deletion_type", ""))
-    detail = str(row.get("classification_detail", ""))
-    if deletion_type == "type I":
-        label = "BP1-BP3 type I"
-    elif deletion_type == "type II":
-        label = "BP2-BP3 type II"
-    elif deletion_type == "atypical":
-        label = "atypical"
-    else:
-        label = deletion_type or "not called"
-    if deletion_type in {"type I", "type II"} and ("extension" in detail or "BP3/BP4" in detail):
-        label += " ext."
-    return label
-
-
-def add_genome_offsets(chrom_sizes: pd.DataFrame) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
-    offsets: dict[str, float] = {}
-    centers: dict[str, float] = {}
-    ends: dict[str, float] = {}
-    offset = 0.0
-    for _, row in chrom_sizes.iterrows():
-        chrom = str(row["chrom"])
-        length = float(row["length"])
-        offsets[chrom] = offset
-        centers[chrom] = offset + length / 2.0
-        offset += length
-        ends[chrom] = offset
-    return offsets, centers, ends
-
-
-def prepare_deletion_panel_data(deletion_df: pd.DataFrame) -> pd.DataFrame:
-    z = deletion_df.copy()
-    z = z[z["patient_id"].astype(str).ne("")]
-    z["group"] = z["group"].map(parse_group)
-    z["display_label"] = z["patient_id"].map(DISPLAY_SAMPLE_LABELS)
-    z["size_mb"] = pd.to_numeric(z["deletion_size"], errors="coerce") / 1e6
-    type_label = {
-        "type I": "BP1-BP3 type I",
-        "type II": "BP2-BP3 type II",
-        "atypical": "Atypical",
-    }
-    z["class_label"] = z["deletion_type"].map(type_label).fillna(z["deletion_type"])
-    order = {sid: i for i, (sid, _syn, grp) in enumerate(COHORT) if grp in {"PWS_DEL", "AS_DEL"}}
-    z["plot_order"] = z["patient_id"].map(order)
-    return z.sort_values("plot_order").reset_index(drop=True)
-
-
-def plot_panel_a_original(fig: plt.Figure, subplot_spec, deletion_df: pd.DataFrame, coverage_df: pd.DataFrame, gtf_path: Path) -> None:
-    del_rows = deletion_df.copy()
-    del_rows = del_rows[del_rows["patient_id"].isin([sid for sid, _syn, grp in COHORT if grp in {"PWS_DEL", "AS_DEL"}])]
-    gene_catalog = load_chr15_gene_catalog(gtf_path)
-    bp12_genes = build_gene_track(gene_catalog, BP12_GENE_ORDER)
-    pws_core_genes = build_gene_track(gene_catalog, PWS_CORE_GENE_ORDER)
-    extra_genes = build_gene_track(gene_catalog, EXTRA_007P_FIGURE_GENES)
-    panel_a_ratios = [1.60, 1.12, 1.02, 0.98] + [1.28] * max(1, len(del_rows))
-    gs_a = GridSpecFromSubplotSpec(
-        len(panel_a_ratios),
-        2,
-        subplot_spec=subplot_spec,
-        height_ratios=panel_a_ratios,
-        width_ratios=[0.34, 1.0],
-        hspace=0.16,
-        wspace=0.07,
-    )
-    ax_a_head = fig.add_subplot(gs_a[0, :])
-    ax_a_head.axis("off")
-    ax_a_head.text(0.0, 0.94, "A. chr15 HiFi coverage and deletion classes", ha="left", va="center", fontsize=12.5, fontweight="bold")
-    ax_a_head.text(
-        0.0,
-        0.66,
-        "Dotted guides mark BP1-BP3; dashed guides mark BP4-BP5; colored dashed lines mark sample-specific deletion boundaries.",
-        ha="left",
-        va="center",
-        fontsize=8.3,
-        color="#222222",
-    )
-    panel_a_legend = [
-        Line2D([0], [0], color=PANEL_A_COLORS["total"], lw=1.8, label="Total depth"),
-        Line2D([0], [0], color=PANEL_A_COLORS["hap1"], lw=1.5, label="hap1 HP-tagged"),
-        Line2D([0], [0], color=PANEL_A_COLORS["hap2"], lw=1.5, label="hap2 HP-tagged"),
-        Line2D([0], [0], color=PANEL_A_COLORS["unphased"], lw=1.3, ls="--", label="Unphased"),
-    ]
-    ax_a_head.legend(handles=panel_a_legend, loc="lower left", bbox_to_anchor=(0.0, 0.02), ncol=4, fontsize=8.0, frameon=False, handlelength=2.2, columnspacing=1.2)
-
-    gene_row_labels = {
-        1: "BP1-BP2 genes\n(CHM13 GTF)",
-        2: "Core PWS/AS\nregion genes",
-        3: "Distal genes\nin 007P",
-    }
-    for row_idx, label in gene_row_labels.items():
-        blank = fig.add_subplot(gs_a[row_idx, 0])
-        blank.axis("off")
-        blank.text(0.0, 0.55, label, ha="left", va="center", fontsize=8.0, fontweight="bold", linespacing=1.15)
-    ax_bp12 = fig.add_subplot(gs_a[1, 1])
-    ax_core = fig.add_subplot(gs_a[2, 1], sharex=ax_bp12)
-    ax_extra = fig.add_subplot(gs_a[3, 1], sharex=ax_bp12)
-    plot_panel_a_gene_axis(ax_bp12, bp12_genes, PANEL_A_COLORS["core_gene"], PANEL_A_COLORS["core_gene_fill"], ["BP1", "BP2", "BP3"])
-    plot_panel_a_gene_axis(ax_core, pws_core_genes, PANEL_A_COLORS["core_gene"], PANEL_A_COLORS["core_gene_fill"], [])
-    plot_panel_a_gene_axis(ax_extra, extra_genes, PANEL_A_COLORS["extra_gene"], PANEL_A_COLORS["extra_gene_fill"], ["BP4", "BP5"])
-    ax_extra.set_xticks(np.arange(18, 33, 2))
-    ax_extra.tick_params(axis="x", labelbottom=True, labelsize=7, pad=1)
-
-    axes_a = []
-    for idx, (_, row) in enumerate(del_rows.iterrows()):
-        label_ax = fig.add_subplot(gs_a[idx + 4, 0])
-        label_ax.axis("off")
-        ax = fig.add_subplot(gs_a[idx + 4, 1], sharex=ax_bp12)
-        axes_a.append(ax)
-        sid = row["patient_id"]
-        z = coverage_df[coverage_df["sample_id"].eq(sid)].copy()
-        group = str(row.get("group", ""))
-        boundary_color = PANEL_A_COLORS["boundary_as"] if group == "AS_DEL" else PANEL_A_COLORS["boundary_pws"]
-        deleted_fill = PANEL_A_COLORS["deleted_as"] if group == "AS_DEL" else PANEL_A_COLORS["deleted_pws"]
-        if pd.notna(row["breakpoint_5prime"]) and pd.notna(row["breakpoint_3prime"]):
-            ax.axvspan(row["breakpoint_5prime"] / 1e6, row["breakpoint_3prime"] / 1e6, color=deleted_fill, alpha=0.80, zorder=0)
-        add_panel_a_breakpoint_guides(ax)
-        if not z.empty:
-            x = z["bin_mid"] / 1e6
-            ax.plot(x, z["total_depth"], color=PANEL_A_COLORS["total"], lw=1.0)
-            ax.plot(x, z["hap1_depth"], color=PANEL_A_COLORS["hap1"], lw=0.9)
-            ax.plot(x, z["hap2_depth"], color=PANEL_A_COLORS["hap2"], lw=0.9)
-            if "unphased_depth" in z:
-                ax.plot(x, z["unphased_depth"], color=PANEL_A_COLORS["unphased"], lw=0.8, ls="--")
-            ymax = max(1.0, np.nanpercentile(z["total_depth"], 98.5) * 1.18)
-            ax.set_ylim(0, ymax)
-        if pd.notna(row["breakpoint_5prime"]) and pd.notna(row["breakpoint_3prime"]):
-            ax.axvline(row["breakpoint_5prime"] / 1e6, color=boundary_color, ls="--", lw=0.9)
-            ax.axvline(row["breakpoint_3prime"] / 1e6, color=boundary_color, ls="--", lw=0.9)
-        deletion_mb = pd.to_numeric(row.get("deletion_size"), errors="coerce") / 1e6
-        label_ax.text(0.00, 0.74, DISPLAY_SAMPLE_LABELS.get(sid, sid), ha="left", va="center", fontsize=9.2, color=boundary_color, fontweight="bold")
-        label_ax.text(0.00, 0.45, panel_a_deletion_label(row), ha="left", va="center", fontsize=6.6, color=boundary_color, fontweight="bold")
-        label_ax.text(0.00, 0.17, f"{deletion_mb:.3f} Mb loss", ha="left", va="center", fontsize=6.8, color="#333333")
-        ax.set_xlim(PLOT_START / 1e6, PLOT_END / 1e6)
-        ax.set_xticks(np.arange(18, 33, 2))
-        ax.tick_params(axis="y", labelsize=6, length=2)
-        ax.grid(axis="y", color="#eeeeee", lw=0.45)
-        ax.spines[["top", "right"]].set_visible(False)
-        if idx < len(del_rows) - 1:
-            ax.tick_params(axis="x", labelbottom=False)
-        else:
-            ax.set_xlabel("chr15 position (Mb, CHM13)")
-            ax.tick_params(axis="x", labelbottom=True, labelsize=8)
-    if axes_a:
-        axes_a[len(axes_a) // 2].set_ylabel("Depth per 50 kb bin")
-
-
-def prepare_cnv_burden(cnv_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    z = cnv_df.copy()
-    z["group"] = z["group"].map(parse_group)
-    burden = (
-        z[
-            z["size_bp"].ge(2_000_000)
-            & ~z["chrom"].isin(["chrX", "chrY"])
-            & ~z["is_canonical_chr15_deletion"].astype(bool)
-        ]
-        .groupby(["sample_id", "group"], as_index=False)
-        .agg(
-            nonchr15_large_cnv_count=("chrom", "size"),
-            nonchr15_large_cnv_total_mb=("size_bp", lambda s: s.sum() / 1e6),
-            nonchr15_large_cnv_max_mb=("size_bp", lambda s: s.max() / 1e6),
-        )
-    )
-    meta = pd.DataFrame(COHORT, columns=["sample_id", "syndrome", "group"])
-    burden = meta.merge(burden, on=["sample_id", "group"], how="left").fillna(0)
-    burden["display_label"] = burden["sample_id"].map(DISPLAY_SAMPLE_LABELS)
+def group_tests(df: pd.DataFrame, metrics: list[str], groups: list[str]) -> pd.DataFrame:
     rows = []
-    for metric in ["nonchr15_large_cnv_count", "nonchr15_large_cnv_total_mb"]:
-        observed_h, pvalue, permutation_method, n_permutations = permutation_kruskal(
-            burden[metric].to_numpy(), burden["group"].to_numpy()
-        )
-        rows.append(
-            {
-                "metric": metric,
-                "n_samples": int(len(burden)),
-                "n_groups": len(PANEL_GROUP_ORDER),
-                "exact_permutation_p": pvalue,
-                "permutation_method": permutation_method,
-                "n_permutations": n_permutations,
-                "kruskal_h": observed_h,
-                "epsilon_squared": epsilon_squared(observed_h, len(burden), len(PANEL_GROUP_ORDER)),
-            }
-        )
-    stats_df = pd.DataFrame(rows)
-    stats_df["q_value"] = bh_adjust(stats_df["exact_permutation_p"])
-    return burden, stats_df
+    for m in metrics:
+        vals = [df.loc[df["group"] == g, m].to_numpy(float) for g in groups]
+        h, p, eta = stats.kruskal(vals)
+        rows.append({"metric": m, "kruskal_H": h, "eta2": eta, "permutation_p": stats.kruskal_permutation(vals, 10_000)})
+    t = pd.DataFrame(rows)
+    t["q"] = stats.bh(t["permutation_p"])
+    return t
 
 
-def prepare_sv_burden(sv_burden_df: pd.DataFrame, sv_calls_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    burden = sv_burden_df.copy()
-    burden["group"] = burden["group"].map(parse_group)
-    span = sv_calls_df.copy()
-    span["group"] = span["group"].map(parse_group)
-    span = span.groupby(["sample_id", "group"], as_index=False)["size_bp"].sum().rename(columns={"size_bp": "TOTAL_SPAN_BP"})
-    burden = burden.merge(span, on=["sample_id", "group"], how="left")
-    burden["TOTAL_COUNT"] = burden[["DEL", "INS", "INV", "DUP", "BND"]].sum(axis=1)
-    burden["TOTAL_SPAN_MB"] = burden["TOTAL_SPAN_BP"] / 1e6
-    burden["display_label"] = burden["sample_id"].map(DISPLAY_SAMPLE_LABELS)
-    metrics = ["DEL", "INS", "DUP", "INV", "BND", "TOTAL_COUNT", "TOTAL_SPAN_MB"]
+# ------------------------------------------------------------------ d, e: flanking methylation
+def flank_table(paths, cohort, dels: pd.DataFrame, cis) -> pd.DataFrame:
+    blocks, _ = ann.sd_blocks(paths)
+    lo = int(np.nanmin(dels[["start", "end"]].to_numpy()) - 150_000)
+    hi = int(np.nanmax(dels[["start", "end"]].to_numpy()) + 150_000)
+
+    def load(s):
+        p = cis.find_track(paths.methylation, s, "combined")
+        if p is None:
+            return None
+        t = cis.read_track(p, CHROM, lo, hi)
+        keep = np.ones(len(t.position), bool)
+        for b in blocks.itertuples(index=False):
+            keep &= ~((t.position >= b.start) & (t.position < b.end))
+        return pd.Series(t.beta[keep], index=t.position[keep])
+
+    ref = [load(s) for s in cohort.of(*cohort_lib.BIPARENTAL)]
+    ref = [r for r in ref if r is not None]
+    if not ref:
+        return pd.DataFrame()
+    control = pd.concat(ref, axis=1).mean(axis=1)
+    tracks = {s: load(s) for s in list(dels["sample_id"]) + list(cohort.of("PWS-mUPD"))}
+    def anchor(pos: float, direction: int) -> float:
+        """The edge itself, or the boundary of the duplication containing it in `direction`."""
+        for b in blocks.itertuples(index=False):
+            if b.start <= pos < b.end:
+                return float(b.end if direction > 0 else b.start)
+        return float(pos)
+
     rows = []
-    for metric in metrics:
-        observed_h, pvalue, permutation_method, n_permutations = permutation_kruskal(
-            burden[metric].to_numpy(), burden["group"].to_numpy()
-        )
-        rows.append(
-            {
-                "metric": metric,
-                "n_samples": int(len(burden)),
-                "n_groups": len(PANEL_GROUP_ORDER),
-                "exact_permutation_p": pvalue,
-                "permutation_method": permutation_method,
-                "n_permutations": n_permutations,
-                "kruskal_h": observed_h,
-                "epsilon_squared": epsilon_squared(observed_h, len(burden), len(PANEL_GROUP_ORDER)),
-            }
-        )
-    stats_df = pd.DataFrame(rows)
-    stats_df["q_value"] = bh_adjust(stats_df["exact_permutation_p"])
-    return burden, stats_df
-
-
-def summarize_region_by_distance(region_df: pd.DataFrame, breakpoint_position: int) -> list[dict[str, object]]:
-    rows: list[dict[str, object]] = []
-    if region_df.empty:
-        for bin_label, low, high in DISTANCE_BINS:
-            rows.append(
-                {
-                    "distance_bin": bin_label,
-                    "distance_start_bp": low,
-                    "distance_end_bp": high,
-                    "distance_mid_kb": (low + high) / 2000.0,
-                    "n_cpg": 0,
-                    "total_coverage": 0.0,
-                    "methylation": np.nan,
-                }
-            )
-        return rows
-    tmp = region_df.copy()
-    tmp["abs_distance_bp"] = (tmp["mid"] - breakpoint_position).abs()
-    for bin_label, low, high in DISTANCE_BINS:
-        z = tmp[(tmp["abs_distance_bp"] >= low) & (tmp["abs_distance_bp"] < high)]
-        rows.append(
-            {
-                "distance_bin": bin_label,
-                "distance_start_bp": low,
-                "distance_end_bp": high,
-                "distance_mid_kb": (low + high) / 2000.0,
-                "n_cpg": int(len(z)),
-                "total_coverage": float(z["coverage"].sum()) if not z.empty else 0.0,
-                "methylation": weighted_average(z["meth"], z["coverage"]) if not z.empty else np.nan,
-            }
-        )
-    return rows
-
-
-def prepare_methylation_distance_decay(profile_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    z = profile_df.copy()
-    z["group"] = z["group"].map(parse_group)
-    z = z[z["group"].isin(["PWS_DEL", "AS_DEL", "PWS_mUPD"])].copy()
-    z["abs_distance_bp"] = pd.to_numeric(z["relative_mid_bp"], errors="coerce").abs()
-    z["coverage_weight"] = pd.to_numeric(z["retained_total_coverage"], errors="coerce").fillna(0.0)
-    z["track_used"] = z["retained_track"].fillna("combined")
-    z["distance_bin"] = pd.cut(
-        z["abs_distance_bp"],
-        bins=[0, 10_000, 25_000, 50_000, 100_000],
-        labels=[label for label, _low, _high in DISTANCE_BINS],
-        right=False,
-        include_lowest=True,
-    )
-    z = z[z["distance_bin"].notna()].copy()
-    bin_lookup = {label: (low, high) for label, low, high in DISTANCE_BINS}
-    z["distance_start_bp"] = z["distance_bin"].map(lambda label: bin_lookup[str(label)][0])
-    z["distance_end_bp"] = z["distance_bin"].map(lambda label: bin_lookup[str(label)][1])
-    z["distance_mid_kb"] = z["distance_bin"].map(lambda label: (bin_lookup[str(label)][0] + bin_lookup[str(label)][1]) / 2000.0)
-
-    agg_rows: list[dict[str, object]] = []
-    for keys, unit_df in z.groupby(
-        ["sample_id", "comparison_patient_id", "group", "breakpoint_side", "distance_bin", "distance_start_bp", "distance_end_bp", "distance_mid_kb", "track_used"],
-        dropna=False,
-        observed=False,
-    ):
-        sample_id, comparison_id, group, side, bin_label, low, high, mid_kb, track_used = keys
-        agg_rows.append(
-            {
-                "sample_id": sample_id,
-                "comparison_patient_id": comparison_id,
-                "group": group,
-                "group_label": METH_GROUP_LABEL.get(group, GROUP_LABEL[group]),
-                "breakpoint_side": side,
-                "distance_bin": str(bin_label),
-                "distance_start_bp": int(low),
-                "distance_end_bp": int(high),
-                "distance_mid_kb": float(mid_kb),
-                "track_used": track_used,
-                "n_cpg": int(pd.to_numeric(unit_df["retained_n_cpg"], errors="coerce").fillna(0).sum()),
-                "total_coverage": float(unit_df["coverage_weight"].sum()),
-                "methylation": weighted_average(unit_df["retained_methylation"], unit_df["coverage_weight"]),
-                "control_mean_methylation": weighted_average(unit_df["control_mean_methylation"], unit_df["coverage_weight"]),
-                "control_sd_methylation": float(unit_df["control_sd_methylation"].mean()),
-                "control_mean_cpg": float(pd.to_numeric(unit_df["control_mean_cpg"], errors="coerce").mean()),
-                "delta_vs_control": weighted_average(unit_df["delta_vs_control"], unit_df["coverage_weight"]),
-            }
-        )
-    merged = pd.DataFrame(agg_rows)
-    merged["abs_delta_vs_control"] = merged["delta_vs_control"].abs()
-
-    curve_rows: list[dict[str, object]] = []
-    for (group, side, bin_label, distance_mid_kb), z in merged.groupby(
-        ["group", "breakpoint_side", "distance_bin", "distance_mid_kb"],
-        as_index=False,
-    ):
-        if group == "PWS_mUPD":
-            sample_level = (
-                z.groupby(["comparison_patient_id"], as_index=False)
-                .agg(delta_vs_control=("delta_vs_control", "mean"))
-                .dropna(subset=["delta_vs_control"])
-            )
-            values = sample_level["delta_vs_control"].to_numpy(dtype=float)
-            mean_delta = float(np.nanmean(values)) if len(values) else np.nan
-            ci_low, ci_high = (np.nan, np.nan)
-            n_samples = 1 if len(values) else 0
-            n_regions = int(len(values))
-        else:
-            sample_level = (
-                z.groupby(["sample_id"], as_index=False)
-                .agg(delta_vs_control=("delta_vs_control", "mean"))
-                .dropna(subset=["delta_vs_control"])
-            )
-            values = sample_level["delta_vs_control"].to_numpy(dtype=float)
-            mean_delta = float(np.nanmean(values)) if len(values) else np.nan
-            ci_low, ci_high = bootstrap_ci(values) if len(values) >= 2 else (np.nan, np.nan)
-            n_samples = int(len(values))
-            n_regions = int(len(values))
-        curve_rows.append(
-            {
-                "group": group,
-                "group_label": METH_GROUP_LABEL.get(group, GROUP_LABEL[group]),
-                "breakpoint_side": side,
-                "distance_bin": bin_label,
-                "distance_mid_kb": distance_mid_kb,
-                "mean_delta_vs_control": mean_delta,
-                "ci_low": ci_low,
-                "ci_high": ci_high,
-                "n_samples": n_samples,
-                "n_regions": n_regions,
-            }
-        )
-
-    effect_rows: list[dict[str, object]] = []
-    for group in ["PWS_DEL", "AS_DEL", "PWS_mUPD"]:
-        for side in ["5prime", "3prime"]:
-            z = merged[(merged["group"] == group) & (merged["breakpoint_side"] == side)].copy()
-            if group == "PWS_mUPD":
-                per_unit_rows = []
-                for comparison_id, unit_df in z.groupby("comparison_patient_id"):
-                    near = unit_df[unit_df["distance_end_bp"] <= 25_000]
-                    far = unit_df[unit_df["distance_start_bp"] >= 50_000]
-                    if near.empty or far.empty:
+    for r in dels.itertuples(index=False):
+        for edge, pos, inward in (("proximal", r.start, 1), ("distal", r.end, -1)):
+            if not np.isfinite(pos):
+                continue
+            for side, direction in (("inside (CN 1)", inward), ("outside (CN 2)", -inward)):
+                a0 = anchor(pos, direction)
+                for genome in [r.sample_id] + list(cohort.of("PWS-mUPD")):
+                    tr = tracks.get(genome)
+                    if tr is None:
                         continue
-                    per_unit_rows.append(
-                        {
-                            "comparison_patient_id": comparison_id,
-                            "near_abs_delta": float(near["abs_delta_vs_control"].mean()),
-                            "far_abs_delta": float(far["abs_delta_vs_control"].mean()),
-                            "near_signed_delta": float(near["delta_vs_control"].mean()),
-                            "far_signed_delta": float(far["delta_vs_control"].mean()),
-                        }
-                    )
-                per_unit = pd.DataFrame(per_unit_rows)
-                near_abs_mean = float(per_unit["near_abs_delta"].mean()) if not per_unit.empty else np.nan
-                far_abs_mean = float(per_unit["far_abs_delta"].mean()) if not per_unit.empty else np.nan
-                near_signed_mean = float(per_unit["near_signed_delta"].mean()) if not per_unit.empty else np.nan
-                far_signed_mean = float(per_unit["far_signed_delta"].mean()) if not per_unit.empty else np.nan
-                effect_rows.append(
-                    {
-                        "group": group,
-                        "group_label": METH_GROUP_LABEL[group],
-                        "breakpoint_side": side,
-                        "n_units": 1,
-                        "n_reference_regions": int(len(per_unit)),
-                        "near_abs_delta_mean": near_abs_mean,
-                        "far_abs_delta_mean": far_abs_mean,
-                        "near_minus_far_abs_delta": near_abs_mean - far_abs_mean if np.isfinite(near_abs_mean) and np.isfinite(far_abs_mean) else np.nan,
-                        "ci_low": np.nan,
-                        "ci_high": np.nan,
-                        "exact_signflip_p": np.nan,
-                        "near_signed_delta_mean": near_signed_mean,
-                        "far_signed_delta_mean": far_signed_mean,
-                        "note": "Descriptive only; BP-coordinate-matched regions in one PWS-UPD sample.",
-                    }
-                )
-                continue
-
-            per_unit_rows = []
-            for sample_id, sample_df in z.groupby("sample_id"):
-                near = sample_df[sample_df["distance_end_bp"] <= 25_000]
-                far = sample_df[sample_df["distance_start_bp"] >= 50_000]
-                if near.empty or far.empty:
-                    continue
-                per_unit_rows.append(
-                    {
-                        "sample_id": sample_id,
-                        "near_abs_delta": float(near["abs_delta_vs_control"].mean()),
-                        "far_abs_delta": float(far["abs_delta_vs_control"].mean()),
-                        "near_signed_delta": float(near["delta_vs_control"].mean()),
-                        "far_signed_delta": float(far["delta_vs_control"].mean()),
-                    }
-                )
-            per_unit = pd.DataFrame(per_unit_rows)
-            if per_unit.empty:
-                effect_rows.append(
-                    {
-                        "group": group,
-                        "group_label": METH_GROUP_LABEL[group],
-                        "breakpoint_side": side,
-                        "n_units": 0,
-                        "n_reference_regions": 0,
-                        "near_abs_delta_mean": np.nan,
-                        "far_abs_delta_mean": np.nan,
-                        "near_minus_far_abs_delta": np.nan,
-                        "ci_low": np.nan,
-                        "ci_high": np.nan,
-                        "exact_signflip_p": np.nan,
-                        "near_signed_delta_mean": np.nan,
-                        "far_signed_delta_mean": np.nan,
-                        "note": "Insufficient data",
-                    }
-                )
-                continue
-            diff = per_unit["near_abs_delta"] - per_unit["far_abs_delta"]
-            ci_low, ci_high = bootstrap_ci(diff.to_numpy(dtype=float))
-            effect_rows.append(
-                {
-                    "group": group,
-                    "group_label": METH_GROUP_LABEL[group],
-                    "breakpoint_side": side,
-                    "n_units": int(len(per_unit)),
-                    "n_reference_regions": int(len(per_unit)),
-                    "near_abs_delta_mean": float(per_unit["near_abs_delta"].mean()),
-                    "far_abs_delta_mean": float(per_unit["far_abs_delta"].mean()),
-                    "near_minus_far_abs_delta": float(diff.mean()),
-                    "ci_low": ci_low,
-                    "ci_high": ci_high,
-                    "exact_signflip_p": exact_sign_flip_pvalue(diff.to_numpy(dtype=float)),
-                    "near_signed_delta_mean": float(per_unit["near_signed_delta"].mean()),
-                    "far_signed_delta_mean": float(per_unit["far_signed_delta"].mean()),
-                    "note": "Formal exact sign-flip test across samples.",
-                }
-            )
-
-    effect_df = pd.DataFrame(effect_rows)
-    qvals = bh_adjust(effect_df.loc[effect_df["group"].isin(["PWS_DEL", "AS_DEL"]), "exact_signflip_p"].to_numpy(dtype=float))
-    effect_df["q_value"] = np.nan
-    effect_df.loc[effect_df["group"].isin(["PWS_DEL", "AS_DEL"]), "q_value"] = qvals
-    return merged, pd.DataFrame(curve_rows), effect_df
+                    j = pd.concat([tr.rename("x"), control.rename("c")], axis=1, join="inner")
+                    rel = (j.index.to_numpy() - a0) * direction
+                    for b0, b1 in FLANK_BINS:
+                        m = (rel >= b0) & (rel < b1)
+                        n = int(m.sum())
+                        rows.append({"carrier": r.sample_id, "genome": genome, "group": cohort.group(genome),
+                                     "edge": edge, "edge_pos": pos, "side": side, "anchor": a0,
+                                     "anchor_offset_bp": abs(a0 - pos), "bin": f"{b0 // 1000}-{b1 // 1000} kb",
+                                     "distance_start": b0, "distance_end": b1, "n_cpg": n,
+                                     "methylation": float(j["x"].to_numpy()[m].mean()) if n >= MIN_CPG_BIN else np.nan,
+                                     "control": float(j["c"].to_numpy()[m].mean()) if n >= MIN_CPG_BIN else np.nan})
+    t = pd.DataFrame(rows)
+    t["delta"] = t["methylation"] - t["control"]
+    return t
 
 
-def panel_label(text: str, title: str) -> str:
-    return f"{text}. {title}"
-
-
-CLASS_MARKERS = {
-    "BP1-BP3 type I": "o",
-    "BP2-BP3 type II": "s",
-    "Atypical": "D",
-}
-
-
-def plot_panel_a_schematic(ax: plt.Axes, deletion_df: pd.DataFrame) -> None:
-    plot_df = deletion_df.copy()
-    plot_df["y"] = np.arange(len(plot_df))[::-1]
-    for bp_name, bp_pos in PANEL_A_BREAKPOINTS.items():
-        is_core = bp_name in {"BP1", "BP2", "BP3"}
-        ax.axvline(
-            bp_pos / 1e6,
-            color="#8a7a3a" if is_core else "#b79d73",
-            lw=1.0 if is_core else 0.8,
-            ls=":" if is_core else "--",
-            zorder=0,
-        )
-        ax.text(bp_pos / 1e6, 1.01, bp_name, transform=ax.get_xaxis_transform(), ha="center", va="bottom", fontsize=8, color="#7a6a2d", fontweight="bold")
-    for _, row in plot_df.iterrows():
-        y = float(row["y"])
-        group = row["group"]
-        start_mb = float(row["breakpoint_5prime"]) / 1e6
-        end_mb = float(row["breakpoint_3prime"]) / 1e6
-        ax.add_patch(
-            Rectangle(
-                (start_mb, y - 0.28),
-                end_mb - start_mb,
-                0.56,
-                facecolor=GROUP_FILLS[group],
-                edgecolor=GROUP_COLORS[group],
-                linewidth=1.4,
-                zorder=3,
-            )
-        )
-        ax.text(16.92, y, f"{row['display_label']}  {GROUP_LABEL[group]}", ha="right", va="center", fontsize=9.3, color=GROUP_COLORS[group], fontweight="bold")
-        ax.text(33.12, y, f"{row['class_label']} | {row['size_mb']:.2f} Mb", ha="left", va="center", fontsize=8.3, color="#333333")
-    ax.set_title(panel_label("A", "Recurrent and atypical chr15q11–q13 deletion architectures"), loc="left", fontsize=13, fontweight="bold")
-    ax.set_xlim(17.0, 33.0)
-    ax.set_ylim(-0.8, len(plot_df) - 0.2)
-    ax.set_yticks([])
-    ax.set_xlabel("chr15 position (Mb, CHM13)")
-    ax.grid(axis="x", color="#ededed", lw=0.6)
-    ax.spines[["top", "right", "left"]].set_visible(False)
-    ax.text(
-        0.0,
-        -0.16,
-        "Most deletion carriers fall into BP1/BP2-to-BP3/BP4-like classes; 007P is the only clear atypical extended deletion.",
-        transform=ax.transAxes,
-        ha="left",
-        va="top",
-        fontsize=8.8,
-        color="#333333",
-    )
-
-
-def plot_deletion_size_panel(ax: plt.Axes, deletion_df: pd.DataFrame) -> None:
-    plot_df = deletion_df[deletion_df["group"].isin(["PWS_DEL", "AS_DEL"])].copy()
-    group_order = ["PWS_DEL", "AS_DEL"]
-    positions = {group: idx for idx, group in enumerate(group_order)}
-    rng = np.random.default_rng(21)
-    for group in group_order:
-        z = plot_df[plot_df["group"] == group]
-        if z.empty:
-            continue
-        x = np.full(len(z), positions[group], dtype=float) + rng.uniform(-0.10, 0.10, size=len(z))
-        for xi, (_, row) in zip(x, z.iterrows()):
-            marker = CLASS_MARKERS.get(row["class_label"], "o")
-            ax.scatter(
-                xi,
-                row["size_mb"],
-                s=70 if marker != "D" else 95,
-                marker=marker,
-                color=GROUP_COLORS[group],
-                edgecolor="white",
-                linewidth=0.7,
-                zorder=4,
-            )
-            ax.text(xi + 0.03, row["size_mb"] + 0.08, row["display_label"], fontsize=7.6, color="#333333", ha="left", va="bottom")
-        ax.hlines(float(z["size_mb"].median()), positions[group] - 0.20, positions[group] + 0.20, color="#111111", lw=1.2, zorder=3)
-    handles = [
-        Line2D([0], [0], marker="o", color="w", markerfacecolor="#666666", label="Type I", markersize=7),
-        Line2D([0], [0], marker="s", color="w", markerfacecolor="#666666", label="Type II", markersize=7),
-        Line2D([0], [0], marker="D", color="w", markerfacecolor="#666666", label="Atypical", markersize=7),
-    ]
-    ax.legend(handles=handles, loc="upper left", frameon=False, fontsize=7.6, ncol=3, columnspacing=1.0, handletextpad=0.4)
-    ax.set_title("B1. chr15 deletion size per sample", loc="left", fontsize=11.5, fontweight="bold")
-    ax.set_ylabel("Deletion size (Mb)")
-    ax.set_xticks([positions[g] for g in group_order])
-    ax.set_xticklabels([f"{GROUP_LABEL[g]}\n(n={sum(plot_df['group']==g)})" for g in group_order], fontsize=8.2)
-    ax.grid(axis="y", color="#ededed", lw=0.6)
-    ax.spines[["top", "right"]].set_visible(False)
-
-
-def plot_group_distribution(
-    ax: plt.Axes,
-    df: pd.DataFrame,
-    value_col: str,
-    title: str,
-    y_label: str,
-    group_order: Sequence[str] = PANEL_GROUP_ORDER,
-    kw_pvalue: Optional[float] = None,
-    direct_note: Optional[str] = None,
-) -> None:
-    positions = np.arange(len(group_order), dtype=float)
-    rng = np.random.default_rng(31 + len(value_col))
-    for pos, group in zip(positions, group_order):
-        z = df[df["group"] == group][value_col].to_numpy(dtype=float)
-        z = z[np.isfinite(z)]
-        if len(z) >= 2:
-            box = ax.boxplot(
-                [z],
-                positions=[pos],
-                widths=0.44,
-                patch_artist=True,
-                showfliers=False,
-                medianprops=dict(color="#111111", linewidth=1.1),
-                whiskerprops=dict(color="#888888", linewidth=0.8),
-                capprops=dict(color="#888888", linewidth=0.8),
-                boxprops=dict(edgecolor="#888888", linewidth=0.8),
-            )
-            box["boxes"][0].set_facecolor(GROUP_FILLS[group])
-            box["boxes"][0].set_alpha(0.65)
-        x = np.full(len(z), pos, dtype=float) + rng.uniform(-0.11, 0.11, size=len(z))
-        marker = "D" if len(z) == 1 else "o"
-        ax.scatter(
-            x,
-            z,
-            s=64 if len(z) == 1 else 52,
-            marker=marker,
-            color=GROUP_COLORS[group],
-            edgecolor="white",
-            linewidth=0.6,
-            zorder=4,
-        )
-        if len(z) == 1:
-            ax.text(pos, z[0] + max(np.nanmax(z) * 0.02, 0.05), "descriptive", ha="center", va="bottom", fontsize=6.8, color="#555555")
-    ax.set_title(title, loc="left", fontsize=11.5, fontweight="bold")
-    ax.set_ylabel(y_label)
-    ax.set_xticks(positions)
-    ax.set_xticklabels([f"{GROUP_LABEL[g]}\n(n={GROUP_N[g]})" for g in group_order], fontsize=8.0)
-    ax.grid(axis="y", color="#ededed", lw=0.6)
-    ax.spines[["top", "right"]].set_visible(False)
-    if kw_pvalue is not None:
-        ax.text(
-            0.01,
-            0.97,
-            f"Kruskal-Wallis p = {format_pvalue(kw_pvalue)}",
-            transform=ax.transAxes,
-            ha="left",
-            va="top",
-            fontsize=8.2,
-            bbox=dict(facecolor="white", edgecolor="#dddddd", linewidth=0.4, alpha=0.9),
-        )
-    if direct_note:
-        ax.text(0.99, 0.03, direct_note, transform=ax.transAxes, ha="right", va="bottom", fontsize=8.0, color="#444444")
-
-
-def plot_sv_stats_table(ax: plt.Axes, stats_df: pd.DataFrame) -> None:
-    ax.axis("off")
-    ax.text(0.0, 1.0, "Type-specific SV burden summary", ha="left", va="top", fontsize=9.8, fontweight="bold")
-    ax.text(0.00, 0.77, "SV type", fontsize=8.6, fontweight="bold")
-    ax.text(0.32, 0.77, "KW p", fontsize=8.6, fontweight="bold")
-    ax.text(0.52, 0.77, "FDR q", fontsize=8.6, fontweight="bold")
-    ax.text(0.74, 0.77, "Interpretation", fontsize=8.6, fontweight="bold")
-    row_y = 0.69
-    for metric in ["DEL", "INS", "DUP", "INV", "BND"]:
-        row = stats_df[stats_df["metric"] == metric].iloc[0]
-        interp = "borderline" if float(row["exact_permutation_p"]) < 0.10 else "NS"
-        color = "#666666" if interp == "NS" else "#333333"
-        ax.text(0.00, row_y, metric, fontsize=8.4)
-        ax.text(0.32, row_y, format_pvalue(float(row["exact_permutation_p"])), fontsize=8.4)
-        ax.text(0.52, row_y, format_pvalue(float(row["q_value"])), fontsize=8.4)
-        ax.text(0.74, row_y, interp, fontsize=8.4, color=color)
-        row_y -= 0.10
-    ax.text(
-        0.0,
-        0.10,
-        "Main figure emphasizes total SV count and total SV span.\nType-specific detail can be cited as supplementary support.\nPWS-UPD is shown as a single descriptive sample, not a distribution.",
-        ha="left",
-        va="bottom",
-        fontsize=8.4,
-        color="#333333",
-        linespacing=1.35,
-    )
-
-
-def plot_methylation_decay_main(ax: plt.Axes, curve_df: pd.DataFrame, side: str) -> None:
-    subset = curve_df[curve_df["breakpoint_side"] == side].copy()
-    x_positions = np.arange(len(DISTANCE_BINS), dtype=float)
-    x_labels = [label.replace(" kb", "") for label, _low, _high in DISTANCE_BINS]
-    title = "5' breakpoint" if side == "5prime" else "3' breakpoint"
-    ax.set_title(title, loc="left", fontsize=11.2, fontweight="bold")
-    ax.axhline(0, color="#777777", lw=0.9, ls="--", zorder=0)
-    for group in ["PWS_DEL", "AS_DEL", "PWS_mUPD"]:
-        z = subset[subset["group"] == group].copy()
-        if z.empty:
-            continue
-        z["bin_order"] = z["distance_bin"].map({label: i for i, (label, _low, _high) in enumerate(DISTANCE_BINS)})
-        z = z.sort_values("bin_order")
-        y = z["mean_delta_vs_control"].to_numpy(dtype=float)
-        if group != "PWS_mUPD":
-            ax.fill_between(x_positions, z["ci_low"].to_numpy(dtype=float), z["ci_high"].to_numpy(dtype=float), color=GROUP_COLORS[group], alpha=0.16, zorder=1)
-            ax.plot(x_positions, y, color=GROUP_COLORS[group], lw=2.0, marker="o", ms=4.0, zorder=3)
-        else:
-            ax.plot(x_positions, y, color=GROUP_COLORS[group], lw=1.8, marker="o", ms=4.0, ls="--", zorder=3)
-    ax.set_xticks(x_positions)
-    ax.set_xticklabels(x_labels, fontsize=7.4)
-    ax.set_ylabel("Δ methylation vs controls")
-    ax.set_xlabel("Absolute distance bin from breakpoint (kb)")
-    ax.grid(axis="y", color="#ededed", lw=0.6)
-    ax.spines[["top", "right"]].set_visible(False)
-    ax.set_ylim(-0.08, 0.08)
-
-
-def plot_effect_forest(ax_plot: plt.Axes, effect_df: pd.DataFrame) -> None:
-    order = [
-        ("PWS_DEL", "5prime"),
-        ("PWS_DEL", "3prime"),
-        ("AS_DEL", "5prime"),
-        ("AS_DEL", "3prime"),
-        ("PWS_mUPD", "5prime"),
-        ("PWS_mUPD", "3prime"),
-    ]
+def flank_effects(flank: pd.DataFrame) -> pd.DataFrame:
     rows = []
-    for group, side in order:
-        match = effect_df[(effect_df["group"] == group) & (effect_df["breakpoint_side"] == side)]
-        if not match.empty:
-            rows.append(match.iloc[0])
-    plot_df = pd.DataFrame(rows).reset_index(drop=True)
-    y_positions = np.arange(len(plot_df))[::-1]
-    ax_plot.axvline(0, color="#777777", lw=0.9, ls="--", zorder=0)
-    for y, (_, row) in zip(y_positions, plot_df.iterrows()):
-        color = GROUP_COLORS[row["group"]]
-        estimate = row["near_minus_far_abs_delta"]
-        if np.isfinite(row["ci_low"]) and np.isfinite(row["ci_high"]):
-            ax_plot.hlines(y, row["ci_low"], row["ci_high"], color=color, lw=2.0, zorder=2)
-        ax_plot.scatter(estimate, y, s=60, color=color, edgecolor="white", linewidth=0.5, zorder=3, marker="D" if row["group"] == "PWS_mUPD" else "o")
-        side_label = str(row["breakpoint_side"]).replace("prime", "'")
-        ax_plot.text(-0.115, y, f"{row['group_label']} {side_label}", ha="left", va="center", fontsize=8.5, color="#222222")
-    ax_plot.set_title(panel_label("E", "Near-versus-far breakpoint methylation effects are small"), loc="left", fontsize=13, fontweight="bold")
-    ax_plot.set_xlabel("Near-minus-far Δ methylation")
-    ax_plot.set_xlim(-0.12, 0.08)
-    ax_plot.set_ylim(-0.8, len(plot_df) - 0.2)
-    ax_plot.set_yticks([])
-    ax_plot.grid(axis="x", color="#ededed", lw=0.6)
-    ax_plot.spines[["top", "right", "left"]].set_visible(False)
+    if flank.empty:
+        return pd.DataFrame()
+    unit = flank.groupby(["carrier", "genome", "group", "edge", "side"])
+    for (carrier, genome, group, edge, side), d in unit:
+        near = d.loc[d["distance_end"] <= NEAR_MAX, "delta"].abs().mean()
+        far = d.loc[d["distance_start"] >= FAR_MIN, "delta"].abs().mean()
+        rows.append({"carrier": carrier, "genome": genome, "group": group, "edge": edge, "side": side,
+                     "near_abs_delta": near, "far_abs_delta": far, "near_minus_far": near - far})
+    u = pd.DataFrame(rows)
+    out = []
+    for (group, side), d in u.groupby(["group", "side"]):
+        per_carrier = d.groupby("carrier")["near_minus_far"].mean().dropna().to_numpy()
+        lo, hi = stats.bootstrap_ci(per_carrier) if group != "PWS-mUPD" else (np.nan, np.nan)
+        out.append({"group": group, "side": side, "carriers": len(per_carrier),
+                    "mean_near_minus_far": float(np.mean(per_carrier)) if len(per_carrier) else np.nan,
+                    "ci_low": lo, "ci_high": hi,
+                    "sign_flip_p": stats.sign_flip_p(per_carrier) if group != "PWS-mUPD" else np.nan})
+    e = pd.DataFrame(out)
+    e["q"] = stats.bh(e["sign_flip_p"])
+    return e
 
-def add_pairwise_brackets(
-    ax: plt.Axes,
-    values_by_group: dict[str, np.ndarray],
-    positions: dict[str, float],
-    comparisons: Sequence[tuple[str, str]],
-    fontsize: float = 6.6,
-) -> None:
-    finite_vals = np.concatenate([vals[np.isfinite(vals)] for vals in values_by_group.values() if len(vals[np.isfinite(vals)]) > 0]) if values_by_group else np.array([])
-    if len(finite_vals) == 0:
+
+# ------------------------------------------------------------------ figure
+CN_CMAP = None
+
+
+def cn_cmap():
+    from matplotlib.colors import LinearSegmentedColormap
+    cmap = LinearSegmentedColormap.from_list(
+        "cn", [(0.0, "#B2182B"), (0.25, "#EF8A62"), (0.5, "#F4F4F4"), (0.75, "#67A9CF"), (1.0, "#2166AC")])
+    cmap.set_bad("#FFFFFF")
+    return cmap
+
+
+EVIDENCE_MARKER = {"assembled contig": "D", "contig junction": "*", "SUNK copy number": "o", "HiFiCNV": "s"}
+
+
+def render(outdir: Path, t: dict, meta: dict) -> list[Path]:
+    style.setup()
+    dels, strips = t["deletions"], t["cn"]
+    rows = list(dels.itertuples(index=False))
+    extra = meta.get("extra_rows", [])
+    n = len(rows) + len(extra)
+    fig = plt.figure(figsize=(style.WIDTH, 10.8))
+    gs = GridSpec(7, 1, figure=fig, height_ratios=[0.75 + 0.24 * n, 0.95, 1.35, 1.2, 1.25, 0.95, 1.55], hspace=0.0,
+                  left=0.13, right=0.9, top=0.965, bottom=0.05)
+    cmap = cn_cmap()
+
+    # a -- copy-number strips
+    sub = GridSpecFromSubplotSpec(n + 2, 1, subplot_spec=gs[0], height_ratios=[0.3, 0.55] + [1] * n, hspace=0.18)
+    xl = (mb(PLOT[0]), mb(PLOT[1]))
+    ax_sd = fig.add_subplot(sub[0])
+    ann.draw_sd_track(ax_sd, t["sd_blocks"], xl)
+    ax_sd.tick_params(labelbottom=False, bottom=False)
+    ax_sd.spines["bottom"].set_visible(False)
+    ax_g = fig.add_subplot(sub[1], sharex=ax_sd)
+    ann.draw_gene_track(ax_g, t["genes"], xl, fontsize=style.BASE_FONT - 2)
+    ax_g.tick_params(labelbottom=False, bottom=False)
+    ax_g.spines["bottom"].set_visible(False)
+    items = [(r.sample_id, r.label, r.group, r) for r in rows] + [(e["sample_id"], e["label"], e["group"], None) for e in extra]
+    image = None
+    for k, (sid, label, group, r) in enumerate(items):
+        ax = fig.add_subplot(sub[k + 2], sharex=ax_sd)
+        d = strips[strips["sample_id"] == sid].sort_values("start") if len(strips) else strips
+        if len(d):
+            v = np.where(d["usable"].to_numpy(bool), d["cn_norm"].to_numpy(float), np.nan)
+            image = ax.imshow(v[None, :], aspect="auto", interpolation="nearest", cmap=cmap, vmin=0, vmax=4,
+                              extent=(mb(d["start"].min()), mb(d["end"].max()), 0, 1))
+        if r is not None:
+            for pos, h in ((r.start, r.hificnv_start), (r.end, r.hificnv_end)):
+                if np.isfinite(h):
+                    ax.plot([mb(h)], [1.12], marker="v", ms=3, mfc="white", mec=style.INK, mew=0.6, clip_on=False)
+                if np.isfinite(pos):
+                    ax.plot([mb(pos), mb(pos)], [-0.05, 1.05], color=style.INK, lw=0.9, clip_on=False)
+            ax.text(1.005, 0.5, f"{r.deletion_class.split(' (')[0]} · {r.size_mb:.1f} Mb", transform=ax.transAxes,
+                    va="center", fontsize=style.BASE_FONT - 2, color=style.INK)
+        else:
+            ax.text(1.005, 0.5, "copy-neutral", transform=ax.transAxes, va="center", fontsize=style.BASE_FONT - 2,
+                    color=style.MUTED)
+        ax.set_yticks([])
+        ax.set_ylim(0, 1)
+        ax.text(-0.005, 0.5, label, transform=ax.transAxes, ha="right", va="center",
+                fontsize=style.BASE_FONT - 1.5, color=cohort_lib.COLOR[group], fontweight="bold")
+        ax.tick_params(labelbottom=k == n - 1, left=False)
+        for sp in ("left", "top", "right"):
+            ax.spines[sp].set_visible(False)
+    ax.set_xlim(*xl)
+    ax.set_xlabel("chr15 (Mb, T2T-CHM13)")
+    if image is not None:
+        top = ax_sd.get_position().y1
+        cax = fig.add_axes([0.76, top + 0.03, 0.14, 0.006])
+        bar = fig.colorbar(image, cax=cax, orientation="horizontal", ticks=[0, 1, 2, 3, 4])
+        bar.ax.tick_params(labelsize=style.BASE_FONT - 2, length=1.5, pad=1)
+        cax.text(-0.04, 0.5, "copy number", transform=cax.transAxes, ha="right", va="center",
+                 fontsize=style.BASE_FONT - 1.5)
+    style.panel_label(fig, ax_sd, "a", f"Deletion architecture ({meta['cn_source'].split(' (')[0]}); "
+                      "line, best edge; open triangle, HiFiCNV", dx=-0.12, dy=0.035)
+
+    # b -- edge refinement | c -- SV burden
+    sub = GridSpecFromSubplotSpec(1, 3, subplot_spec=gs[2], width_ratios=[1.35, 1, 1], wspace=0.55)
+    ax = fig.add_subplot(sub[0])
+    sh = t["edges"]
+    labels_b = []
+    for k, r in enumerate(dels.itertuples(index=False)):
+        labels_b.append(r.label)
+        for e in sh[sh["sample_id"] == r.sample_id].itertuples(index=False):
+            if not np.isfinite(e.shift_kb):
+                continue
+            ax.plot(e.shift_kb, k + (-0.15 if e.edge == "proximal" else 0.15), marker=EVIDENCE_MARKER[e.evidence],
+                    ls="", ms=5 if e.evidence != "contig junction" else 7, color=cohort_lib.COLOR[r.group],
+                    mfc=cohort_lib.COLOR[r.group] if e.edge == "proximal" else "white", mew=0.9)
+    ax.axvline(0, color=style.MUTED, lw=0.6)
+    ax.set_yticks(range(len(labels_b)))
+    ax.set_yticklabels(labels_b, fontsize=style.BASE_FONT - 1.5)
+    ax.set_ylim(len(labels_b) - 0.5, -0.5)
+    ax.set_xlabel("edge − HiFiCNV edge (kb)")
+    short = {"assembled contig": "assembled", "contig junction": "junction", "SUNK copy number": "SUNK",
+             "HiFiCNV": "HiFiCNV"}
+    handles = [Line2D([], [], marker=m, ls="", color=style.MUTED, ms=4.5, label=short[k])
+               for k, m in EVIDENCE_MARKER.items() if (sh["evidence"] == k).any()]
+    handles += [Line2D([], [], marker="o", ls="", color=style.MUTED, ms=4.5, label="proximal"),
+                Line2D([], [], marker="o", ls="", color=style.MUTED, mfc="white", ms=4.5, label="distal")]
+    ax.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.4, -0.26), ncol=3, fontsize=style.BASE_FONT - 2,
+              handletextpad=0.1, borderaxespad=0, columnspacing=0.6, frameon=False)
+    style.panel_label(fig, ax, "b", "Edge refinement", dx=-0.1, dy=0.035)
+    sv = t["sv"]
+    rng = np.random.default_rng(7)
+    for j, (metric, lab) in enumerate((("TOTAL_COUNT", "SVs per genome"), ("TOTAL_SPAN_MB", "SV span (Mb)"))):
+        ax = fig.add_subplot(sub[j + 1])
+        for i, g in enumerate(meta["groups"]):
+            v = sv.loc[sv["group"] == g, metric].to_numpy(float) if len(sv) else []
+            ax.scatter(i + rng.uniform(-0.15, 0.15, len(v)), v, s=14, marker=cohort_lib.MARKER[g],
+                       color=cohort_lib.COLOR[g], edgecolor="white", lw=0.4)
+            if len(v) > 1:
+                ax.hlines(np.median(v), i - 0.3, i + 0.3, color=style.INK, lw=1)
+        ax.set_xticks(range(len(meta["groups"])))
+        ax.set_xticklabels([cohort_lib.PREFIX[g] for g in meta["groups"]], fontsize=style.BASE_FONT - 2)
+        ax.set_ylabel(lab, fontsize=style.BASE_FONT - 1)
+        r = t["sv_stats"][t["sv_stats"]["metric"] == metric] if len(t["sv_stats"]) else pd.DataFrame()
+        if len(r):
+            ax.set_title(f"p = {style.fmt_p(r['permutation_p'].iloc[0])}", fontsize=style.BASE_FONT - 1.5, color=style.MUTED)
+        if j == 0:
+            style.panel_label(fig, ax, "c", "pbsv structural variants", dx=-0.07, dy=0.035)
+
+    # d -- genome-wide CNVs
+    ax = fig.add_subplot(gs[4])
+    calls, lens = t["cnv"], meta["chrom_lengths"]
+    chroms = [c for c in lens if c not in ("chrX", "chrY", "chrM")]
+    offs, x0 = {}, 0
+    for c in chroms:
+        offs[c] = x0
+        x0 += lens[c]
+    for i, c in enumerate(chroms):
+        if i % 2 == 0:
+            ax.axvspan(offs[c] / 1e6, (offs[c] + lens[c]) / 1e6, color="#F5F5F5", lw=0)
+    big = calls[(calls["size_bp"] >= CNV_MIN) & calls["chrom"].isin(chroms)]
+    lesion = big["defining_lesion"].astype(str).isin(["True", "true", "1"]) if len(big) else pd.Series(dtype=bool)
+    for g in cohort_lib.GROUPS:
+        sel = (big["group"] == g) if len(big) else pd.Series(dtype=bool)
+        d, les = big[sel], lesion[sel]
+        if d.empty:
+            continue
+        x = (d["chrom"].map(offs) + (d["start"] + d["end"]) / 2) / 1e6
+        ax.scatter(x, d["size_bp"] / 1e6, s=np.where(les, 46, 16), marker=cohort_lib.MARKER[g], color=cohort_lib.COLOR[g],
+                   edgecolor=np.where(les, style.INK, "white"), lw=0.5, alpha=0.9, zorder=3)
+    ax.set_xticks([(offs[c] + lens[c] / 2) / 1e6 for c in chroms])
+    ax.set_xticklabels([c.replace("chr", "") for c in chroms], fontsize=style.BASE_FONT - 2)
+    ax.set_xlim(0, x0 / 1e6)
+    ax.set_ylabel("CNV size (Mb)")
+    ax.set_ylim(0, max(4, big["size_bp"].max() / 1e6 * 1.12 if len(big) else 4))
+    st = t["cnv_stats"]
+    txt = ", ".join(f"{'count' if 'count' in r.metric else 'total Mb'} p = {style.fmt_p(r.permutation_p)}"
+                    for r in st.itertuples()) if len(st) else ""
+    ax.text(1.0, 1.035, f"other CNVs ≥ 2 Mb by group: {txt}", transform=ax.transAxes, ha="right", va="bottom",
+            fontsize=style.BASE_FONT - 1.5, color=style.MUTED, clip_on=False)
+    ax.legend(handles=style.group_legend_handles(meta["groups"]) +
+              [Line2D([], [], marker="o", ls="", ms=6, mfc="white", mec=style.INK, label="defining lesion")],
+              loc="upper center", ncol=6, fontsize=style.BASE_FONT - 2,
+              bbox_to_anchor=(0.5, -0.15), columnspacing=0.75, handletextpad=0.25,
+              borderaxespad=0)
+    style.panel_label(fig, ax, "d", "Genome-wide HiFiCNV calls ≥ 2 Mb (autosomes)", dx=-0.12, dy=0.02)
+
+    # e -- flank methylation | f -- effects
+    sub = GridSpecFromSubplotSpec(1, 2, subplot_spec=gs[6], width_ratios=[1.25, 1], wspace=0.55)
+    ax = fig.add_subplot(sub[0])
+    flank = t["flank"]
+    groups_d = [g for g in ("PWS-DEL", "AS-DEL", "PWS-mUPD") if len(flank) and (flank["group"] == g).any()]
+    ends = []
+    for g in groups_d:
+        d = flank[flank["group"] == g]
+        for side, sgn in (("inside (CN 1)", 1), ("outside (CN 2)", -1)):
+            e = d[d["side"] == side].groupby(["distance_start", "distance_end", "carrier"])["delta"].mean().reset_index()
+            m = e.groupby(["distance_start", "distance_end"])["delta"].agg(["mean", "count"]).reset_index()
+            x = sgn * (m["distance_start"] + m["distance_end"]) / 2 / 1e3
+            ax.plot(x, m["mean"], marker=cohort_lib.MARKER[g], color=cohort_lib.COLOR[g], lw=1, ms=3.5,
+                    ls="--" if g == "PWS-mUPD" else "-")
+            if sgn == 1 and len(m):
+                ends.append((float(x.iloc[-1]), float(m["mean"].iloc[-1]), g))
+    ax.axhline(0, color=style.LIGHT, lw=0.6)
+    ax.axvline(0, color=style.INK, lw=0.6)
+    ax.text(0.02, 0.97, "outside (CN 2)", transform=ax.transAxes, fontsize=style.BASE_FONT - 1.5, color=style.MUTED, va="top")
+    ax.text(0.98, 0.97, "inside (CN 1)", transform=ax.transAxes, fontsize=style.BASE_FONT - 1.5, color=style.MUTED,
+            va="top", ha="right")
+    ax.set_xlabel("distance from the edge of unique sequence (kb)")
+    ax.set_ylabel("Δ methylation vs\nbiparental genomes")
+    if ends:                                   # direct labels at the right end of each line
+        x_end = max(e[0] for e in ends)
+        ys = sorted(ends, key=lambda e: e[1])
+        lo_, hi_ = ax.get_ylim()
+        gap = (hi_ - lo_) * 0.07
+        placed = []
+        for xe, ye, g in ys:
+            y = ye if not placed or ye - placed[-1] >= gap else placed[-1] + gap
+            placed.append(y)
+            ax.text(x_end + 6, y, cohort_lib.DISPLAY[g], color=cohort_lib.COLOR[g], fontsize=style.BASE_FONT - 1.5,
+                    va="center", ha="left")
+        ax.set_xlim(right=x_end + 45)
+    style.panel_label(fig, ax, "e", "Methylation flanking the breakpoints", dx=-0.07, dy=0.03)
+    ax = fig.add_subplot(sub[1])
+    eff = t["effects"]
+    labels = []
+    for k, r in enumerate(eff.itertuples(index=False)):
+        c = cohort_lib.COLOR[r.group]
+        if np.isfinite(r.ci_low):
+            ax.plot([r.ci_low, r.ci_high], [k, k], color=c, lw=1.4)
+        ax.plot(r.mean_near_minus_far, k, marker=cohort_lib.MARKER[r.group], color=c, ms=5,
+                mfc="white" if r.group == "PWS-mUPD" else c)
+        labels.append(f"{cohort_lib.DISPLAY[r.group]} {r.side.split(' (')[0]} (n={r.carriers}"
+                      + (f"; q={style.fmt_p(r.q)})" if np.isfinite(r.q) else ")"))
+    ax.axvline(0, color=style.MUTED, lw=0.6)
+    ax.set_yticks(range(len(eff)))
+    ax.set_yticklabels(labels, fontsize=style.BASE_FONT - 2)
+    ax.set_ylim(len(eff) - 0.5, -0.5)
+    ax.set_xlabel("near − far |Δ|")
+    style.panel_label(fig, ax, "f", "Near vs far", dx=-0.07, dy=0.03)
+    return style.save(fig, outdir, "Figure5")
+
+
+def report(outdir, t, meta, notes, paths_out) -> Path:
+    r = style.Report("Figure 5 report: deletion structure and breakpoint context")
+    r.p("Generated by `scripts/figures/FIGURE_5.py` from scripts/analysis 01, scripts/duplicons 03/05/08, "
+        "HiFiCNV, pbsv and pb-CpG-tools outputs.")
+    r.h("Deletions (panel a)")
+    r.p(f"Copy number drawn from: {meta['cn_source']}.")
+    r.table(t["deletions"][["sample_id", "label", "group", "start", "end", "size_mb", "start_source", "end_source",
+                            "deletion_class", "status", "analysis01_type"]])
+    if len(t["junctions"]):
+        r.p("Contig junctions used to refine an edge (hifiasm alignments of scripts/duplicons 03):")
+        r.table(t["junctions"])
+    r.h("Edge refinement (panel b)")
+    r.table(t["edges"])
+    r.h("Genome-wide CNVs >= 2 Mb (panel d)")
+    r.table(t["cnv_burden"])
+    r.table(t["cnv_stats"])
+    r.h("pbsv structural variants (panel c)")
+    r.table(t["sv"])
+    r.table(t["sv_stats"])
+    r.h("Breakpoint-flanking methylation (panels e, f)")
+    fl = t["flank"]
+    if len(fl):
+        anchors = fl.drop_duplicates(["carrier", "edge", "side"])[["carrier", "edge", "edge_pos", "side", "anchor",
+                                                                    "anchor_offset_bp"]]
+        r.p("Anchors (an edge inside a segmental duplication is measured from the duplication boundary):")
+        r.table(anchors)
+    r.table(t["effects"])
+    if notes:
+        r.h("Notes")
+        for n_ in notes:
+            r.p(f"- {n_}")
+    cls = t["deletions"]["deletion_class"].value_counts().to_dict()
+    r.h("Caption draft")
+    r.p(f"**Structural definition of 15q11–q13 deletion classes and breakpoint-proximal context.** **a,** Paralog-specific "
+        f"copy number (singly-unique k-mers, 5-kb bins) across chr15:17.5–33 Mb in the {len(t['deletions'])} deletion "
+        f"genomes and PWS-mUPD; vertical lines, best-resolved deletion edges; open triangles, HiFiCNV edges; classes "
+        f"{'; '.join(f'{v} {k}' for k, v in cls.items())}. Top, segmental duplications (BP1–BP3) and genes. "
+        f"**b,** Displacement of each edge from the HiFiCNV call, by the evidence that placed it (assembled contig, "
+        f"contig junction, SUNK copy number). **c,** pbsv structural variants per genome. **d,** Genome-wide HiFiCNV "
+        f"calls ≥ 2 Mb; outlined, the defining lesion of each genome, excluded from the burden test (Kruskal–Wallis "
+        f"permutation). **e,** CpG methylation in 10–100-kb bins on both sides of each edge, measured from the edge of unique "
+        f"sequence, minus the biparental mean; dashed, PWS-mUPD at the carriers' coordinates. **f,** Near-minus-far |Δ| "
+        f"with carrier bootstrap 95% CI; q, sign-flip test with Benjamini–Hochberg correction.")
+    r.p("")
+    r.p("Files: " + ", ".join(p_.name for p_ in paths_out))
+    return r.write(outdir, "Figure5_report.md")
+
+
+def main(argv=None) -> None:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    paths_lib.add_common_arguments(ap)
+    ap.add_argument("--render-only", action="store_true", help="redraw from the tables of a previous run")
+    a = ap.parse_args(argv)
+    paths = paths_lib.resolve(a)
+    outdir = paths.figure_dir(5, a.outdir)
+    names = {"deletions": "Figure5a_deletions.tsv", "junctions": "Figure5a_contig_junctions.tsv",
+             "cn": "Figure5a_copy_number_5kb.tsv.gz", "sd_blocks": "Figure5a_sd_blocks.tsv", "genes": "Figure5a_genes.tsv",
+             "edges": "Figure5b_edge_refinement.tsv", "cnv": "Figure5d_cnv_calls.tsv",
+             "cnv_burden": "Figure5d_cnv_burden.tsv", "cnv_stats": "Figure5d_statistics.tsv",
+             "sv": "Figure5c_sv_burden.tsv", "sv_stats": "Figure5c_statistics.tsv",
+             "flank": "Figure5e_flanking_methylation.tsv", "effects": "Figure5f_effects.tsv"}
+    if a.render_only:
+        t = {k: style.read_table(outdir, v) for k, v in names.items()}
+        meta = json.loads((outdir / "tables" / "Figure5_meta.json").read_text())
+        paths_out = render(outdir, t, meta)
+        print(report(outdir, t, meta, meta.get("notes", []), paths_out))
         return
-    ymin = float(np.nanmin(finite_vals))
-    ymax = float(np.nanmax(finite_vals))
-    yrange = max(ymax - ymin, 1.0)
-    bracket_height = yrange * 0.04
-    step = yrange * 0.12
-    start = ymax + yrange * 0.08
-    for idx, (left_group, right_group) in enumerate(comparisons):
-        left = values_by_group.get(left_group, np.array([], dtype=float))
-        right = values_by_group.get(right_group, np.array([], dtype=float))
-        pvalue = exact_rank_sum_pvalue(left, right)
-        x1 = positions[left_group]
-        x2 = positions[right_group]
-        y = start + idx * step
-        ax.plot([x1, x1, x2, x2], [y, y + bracket_height, y + bracket_height, y], color="#222222", lw=0.8, clip_on=False)
-        ax.text((x1 + x2) / 2.0, y + bracket_height + yrange * 0.015, f"p={format_pvalue(pvalue)}", ha="center", va="bottom", fontsize=fontsize, color="#222222")
-    ax.set_ylim(ymin - yrange * 0.05, start + len(comparisons) * step + yrange * 0.10)
-
-
-def plot_cnv_panel(
-    ax_manhattan: plt.Axes,
-    cnv_df: pd.DataFrame,
-    cnv_burden: pd.DataFrame,
-    cnv_stats: pd.DataFrame,
-    chrom_sizes: pd.DataFrame,
-    deletion_df: pd.DataFrame,
-) -> None:
-    offsets, centers, ends = add_genome_offsets(chrom_sizes)
-    autosomes = [f"chr{i}" for i in range(1, 23)]
-    plot_df = cnv_df[
-        cnv_df["size_bp"].ge(2_000_000)
-        & ~cnv_df["chrom"].isin(["chrX", "chrY"])
-    ].copy()
-    plot_df["group"] = plot_df["group"].map(parse_group)
-    label_lookup = (
-        deletion_df[["patient_id", "display_label"]]
-        .drop_duplicates()
-        .rename(columns={"patient_id": "sample_id"})
-    )
-    plot_df = plot_df.merge(label_lookup, on="sample_id", how="left")
-    if "genome_mid" not in plot_df.columns:
-        plot_df["genome_mid"] = plot_df.apply(lambda r: offsets[str(r["chrom"])] + float(r["mid"]), axis=1)
-    plot_df["size_mb"] = plot_df["size_bp"] / 1e6
-    ax_manhattan.set_title(panel_label("B", "chr15 deletion dominates large CNV signal"), loc="left", fontsize=12.5, fontweight="bold")
-    if "chr15" in offsets:
-        ax_manhattan.axvspan(offsets["chr15"], ends["chr15"], color="#f4efe0", alpha=0.9, zorder=0)
-        ax_manhattan.text(
-            centers["chr15"],
-            1.02,
-            "chr15",
-            transform=ax_manhattan.get_xaxis_transform(),
-            ha="center",
-            va="bottom",
-            fontsize=8.3,
-            color="#7a6a2d",
-            fontweight="bold",
-        )
-    for chrom in autosomes[:-1]:
-        ax_manhattan.axvline(ends[chrom], color="#efefef", lw=0.6, zorder=0)
-    background = plot_df[~plot_df["is_canonical_chr15_deletion"].astype(bool)].copy()
-    if not background.empty:
-        ax_manhattan.scatter(
-            background["genome_mid"],
-            background["size_mb"],
-            s=np.clip(background["size_mb"] * 7.0, 16, 54),
-            color="#b7b7b7",
-            alpha=0.75,
-            edgecolors="none",
-            zorder=2,
-        )
-    canonical_rows: list[pd.Series] = []
-    canonical = plot_df[plot_df["is_canonical_chr15_deletion"].astype(bool)].copy()
-    for _, row in canonical.iterrows():
-        group = str(row["group"])
-        ax_manhattan.scatter(
-            float(row["genome_mid"]),
-            float(row["size_mb"]),
-            s=float(np.clip(float(row["size_mb"]) * 16.0, 110, 260)),
-            marker="o",
-            color=GROUP_COLORS[group],
-            edgecolor="#202020",
-            linewidth=0.6,
-            alpha=0.95,
-            zorder=6,
-        )
-        canonical_rows.append(row)
-    count_row = cnv_stats[cnv_stats["metric"] == "nonchr15_large_cnv_count"].iloc[0]
-    span_row = cnv_stats[cnv_stats["metric"] == "nonchr15_large_cnv_total_mb"].iloc[0]
-    ax_manhattan.text(
-        0.01,
-        0.96,
-        "Non-chr15 burden\n"
-        f"count p = {format_pvalue(float(count_row['exact_permutation_p']))}, q = {format_pvalue(float(count_row['q_value']))}\n"
-        f"span p = {format_pvalue(float(span_row['exact_permutation_p']))}, q = {format_pvalue(float(span_row['q_value']))}",
-        transform=ax_manhattan.transAxes,
-        ha="left",
-        va="top",
-        fontsize=7.8,
-        bbox=dict(facecolor="white", edgecolor="#dddddd", linewidth=0.4, alpha=0.92),
-    )
-    ax_manhattan.set_xticks([centers[c] for c in autosomes])
-    ax_manhattan.set_xticklabels([c.replace("chr", "") for c in autosomes], fontsize=6.8)
-    ax_manhattan.set_ylabel("CNV size (Mb)")
-    ax_manhattan.set_xlabel("Chromosome")
-    ax_manhattan.grid(axis="y", color="#ededed", lw=0.6)
-    ax_manhattan.spines[["top", "right"]].set_visible(False)
-    ax_manhattan.set_ylim(0, max(16, float(plot_df["size_mb"].max()) * 1.08 if not plot_df.empty else 16))
-    handles = [
-        Line2D([0], [0], marker="o", color="w", markerfacecolor=GROUP_COLORS["PWS_DEL"], markeredgecolor="#202020", label="PWS-DEL chr15 deletion", markersize=7),
-        Line2D([0], [0], marker="o", color="w", markerfacecolor=GROUP_COLORS["AS_DEL"], markeredgecolor="#202020", label="AS-DEL chr15 deletion", markersize=7),
-        Line2D([0], [0], marker="o", color="w", markerfacecolor="#b7b7b7", label="Other autosomal CNVs >= 2 Mb", markersize=6),
-    ]
-    ax_manhattan.legend(handles=handles, loc="upper left", bbox_to_anchor=(1.01, 1.00), frameon=False, fontsize=7.3, ncol=1, columnspacing=0.9, handletextpad=0.5, borderaxespad=0.0)
-
-
-def plot_sv_facet(ax: plt.Axes, burden_df: pd.DataFrame, stats_df: pd.DataFrame, metric: str, show_xticks: bool) -> None:
-    positions = np.arange(len(PANEL_GROUP_ORDER), dtype=float)
-    title_map = {
-        "DEL": "DEL",
-        "INS": "INS",
-        "DUP": "DUP",
-        "INV": "INV",
-        "BND": "BND",
-        "TOTAL_COUNT": "Total count",
-        "TOTAL_SPAN_MB": "Total span",
-    }
-    rng = np.random.default_rng(7 + sum(ord(ch) for ch in metric))
-    for idx, group in enumerate(PANEL_GROUP_ORDER):
-        z = burden_df[burden_df["group"] == group][metric].to_numpy(dtype=float)
-        z = z[np.isfinite(z)]
-        if len(z) >= 2:
-            box = ax.boxplot(
-                [z],
-                positions=[positions[idx]],
-                widths=0.48,
-                patch_artist=True,
-                showfliers=False,
-                medianprops=dict(color="#111111", linewidth=1.15),
-                whiskerprops=dict(color="#888888", linewidth=0.8),
-                capprops=dict(color="#888888", linewidth=0.8),
-                boxprops=dict(edgecolor="#888888", linewidth=0.8),
-            )
-            box["boxes"][0].set_facecolor(GROUP_FILLS[group])
-            box["boxes"][0].set_alpha(0.6)
-        x = np.full(len(z), positions[idx]) + rng.uniform(-0.12, 0.12, size=len(z))
-        ax.scatter(
-            x,
-            z,
-            s=48 if len(z) == 1 else 36,
-            marker="D" if len(z) == 1 else "o",
-            color=GROUP_COLORS[group],
-            alpha=0.9,
-            edgecolor="white",
-            linewidth=0.4,
-            zorder=4,
-        )
-    ax.set_title(title_map.get(metric, metric.replace("_", " ")), fontsize=9.5, fontweight="bold", pad=6)
-    ax.grid(axis="y", color="#ededed", lw=0.6)
-    ax.spines[["top", "right"]].set_visible(False)
-    if show_xticks:
-        ax.set_xticks(positions)
-        ax.set_xticklabels([f"{GROUP_LABEL[g]}\n(n={GROUP_N[g]})" for g in PANEL_GROUP_ORDER], fontsize=7.6)
-    else:
-        ax.set_xticks(positions)
-        ax.set_xticklabels([])
-
-
-def plot_sv_panel(fig: plt.Figure, subplot_spec, burden_df: pd.DataFrame, stats_df: pd.DataFrame) -> None:
-    gs = GridSpecFromSubplotSpec(2, 2, subplot_spec=subplot_spec, height_ratios=[0.28, 1.0], hspace=0.05, wspace=0.30)
-    metrics = ["TOTAL_COUNT", "TOTAL_SPAN_MB"]
-    header_left = fig.add_subplot(gs[0, 0])
-    header_right = fig.add_subplot(gs[0, 1])
-    header_left.axis("off")
-    header_right.axis("off")
-    axes = []
-    for idx, metric in enumerate(metrics):
-        ax = fig.add_subplot(gs[1, idx])
-        plot_sv_facet(ax, burden_df, stats_df, metric, show_xticks=True)
-        if metric == "TOTAL_SPAN_MB":
-            ax.set_ylabel("SV span (Mb)")
-        elif metric == "TOTAL_COUNT":
-            ax.set_ylabel("Count per sample")
-        axes.append(ax)
-    header_left.text(
-        0.0,
-        0.98,
-        panel_label("C", "Global SV burden does not clearly separate diagnostic groups"),
-        ha="left",
-        va="top",
-        fontsize=12.5,
-        fontweight="bold",
-    )
-    header_left.text(
-        0.0,
-        0.12,
-        f"Total count: p = {format_pvalue(float(stats_df[stats_df['metric'] == 'TOTAL_COUNT']['exact_permutation_p'].iloc[0]))}",
-        ha="left",
-        va="bottom",
-        fontsize=7.3,
-        color="#333333",
-    )
-    header_right.text(
-        0.0,
-        0.12,
-        f"Total span: p = {format_pvalue(float(stats_df[stats_df['metric'] == 'TOTAL_SPAN_MB']['exact_permutation_p'].iloc[0]))}",
-        ha="left",
-        va="bottom",
-        fontsize=7.3,
-        color="#333333",
-    )
-
-
-def plot_methylation_distance_decay(
-    ax: plt.Axes,
-    curve_df: pd.DataFrame,
-    side: str,
-) -> None:
-    subset = curve_df[curve_df["breakpoint_side"] == side].copy()
-    x_positions = np.arange(len(DISTANCE_BINS), dtype=float)
-    x_labels = [label.replace(" kb", "") for label, _low, _high in DISTANCE_BINS]
-    title = "5' breakpoint-aligned methylation decay" if side == "5prime" else "3' breakpoint-aligned methylation decay"
-    ax.set_title(title, loc="left", fontsize=10.8, fontweight="bold")
-    ax.axhline(0, color="#666666", lw=0.9, ls="--", zorder=0)
-    for group in ["PWS_DEL", "AS_DEL", "PWS_mUPD"]:
-        z = subset[subset["group"] == group].copy()
-        if z.empty:
-            continue
-        z["bin_order"] = z["distance_bin"].map({label: i for i, (label, _low, _high) in enumerate(DISTANCE_BINS)})
-        z = z.sort_values("bin_order")
-        y = z["mean_delta_vs_control"].to_numpy(dtype=float)
-        color = GROUP_COLORS[group]
-        if group != "PWS_mUPD":
-            low = z["ci_low"].to_numpy(dtype=float)
-            high = z["ci_high"].to_numpy(dtype=float)
-            ax.fill_between(x_positions, low, high, color=color, alpha=0.15, zorder=1)
-            ax.plot(x_positions, y, color=color, lw=2.0, marker="o", ms=4.0, zorder=3)
-        else:
-            ax.plot(x_positions, y, color=color, lw=1.9, marker="o", ms=4.0, ls="--", zorder=3)
-    ax.set_xticks(x_positions)
-    ax.set_xticklabels(x_labels, fontsize=7.2)
-    ax.set_ylabel("Δ methylation vs controls")
-    ax.set_xlabel("Absolute distance bin from breakpoint (kb)")
-    ax.grid(axis="y", color="#ededed", lw=0.6)
-    ax.spines[["top", "right"]].set_visible(False)
-    ax.set_ylim(-0.12, 0.12)
-
-
-def plot_methylation_effect_summary(ax: plt.Axes, effect_df: pd.DataFrame) -> None:
-    order = [
-        ("PWS_DEL", "5prime"),
-        ("PWS_DEL", "3prime"),
-        ("AS_DEL", "5prime"),
-        ("AS_DEL", "3prime"),
-        ("PWS_mUPD", "5prime"),
-        ("PWS_mUPD", "3prime"),
-    ]
-    rows = []
-    for group, side in order:
-        match = effect_df[(effect_df["group"] == group) & (effect_df["breakpoint_side"] == side)]
-        if not match.empty:
-            rows.append(match.iloc[0])
-    plot_df = pd.DataFrame(rows).reset_index(drop=True)
-    y_positions = np.arange(len(plot_df))[::-1]
-    ax.axvline(0, color="#777777", lw=0.9, ls="--", zorder=0)
-    for y, (_, row) in zip(y_positions, plot_df.iterrows()):
-        color = GROUP_COLORS[row["group"]]
-        estimate = row["near_minus_far_abs_delta"]
-        if np.isfinite(row["ci_low"]) and np.isfinite(row["ci_high"]):
-            ax.hlines(y, row["ci_low"], row["ci_high"], color=color, lw=2.0, zorder=2)
-        ax.scatter(estimate, y, s=56, color=color, edgecolor="white", linewidth=0.5, zorder=3)
-        side_label = str(row["breakpoint_side"]).replace("prime", "'")
-        left_label = f"{row['group_label']} {side_label}"
-        right_label = (
-            f"n={int(row['n_units'])} | near={row['near_abs_delta_mean']:.3f} | far={row['far_abs_delta_mean']:.3f}\n"
-            f"p={format_pvalue(row['exact_signflip_p'])} | q={format_pvalue(row['q_value'])}"
-            if row["group"] != "PWS_mUPD"
-            else f"n=1 sample | refs={int(row['n_reference_regions'])}\ndescriptive only"
-        )
-        ax.text(-0.102, y, left_label, ha="left", va="center", fontsize=8.1, color="#222222")
-        ax.text(0.082, y, right_label, ha="left", va="center", fontsize=7.3, color="#333333")
-    ax.set_title(panel_label("E", "Breakpoint-associated methylation effect summary"), loc="left", fontsize=12.5, fontweight="bold")
-    ax.set_xlabel("Near-minus-far |Δ methylation| vs controls")
-    ax.set_xlim(-0.11, 0.16)
-    ax.set_ylim(-0.8, len(plot_df) - 0.2)
-    ax.set_yticks([])
-    ax.grid(axis="x", color="#ededed", lw=0.6)
-    ax.spines[["top", "right", "left"]].set_visible(False)
-
-
-def render_figure(
-    out_png: Path,
-    out_pdf: Path,
-    deletion_df: pd.DataFrame,
-    coverage_df: pd.DataFrame,
-    cnv_df: pd.DataFrame,
-    cnv_burden: pd.DataFrame,
-    cnv_stats: pd.DataFrame,
-    chrom_sizes: pd.DataFrame,
-    sv_burden: pd.DataFrame,
-    sv_stats: pd.DataFrame,
-    methyl_curve: pd.DataFrame,
-    methyl_effect: pd.DataFrame,
-    gtf_path: Path,
-) -> None:
-    plt.rcParams.update(
-        {
-            "font.size": 9,
-            "axes.titlesize": 11,
-            "axes.labelsize": 9,
-            "xtick.labelsize": 8,
-            "ytick.labelsize": 8,
-        }
-    )
-    fig = plt.figure(figsize=(18.0, 22.4), constrained_layout=False)
-    outer = GridSpec(5, 1, figure=fig, height_ratios=[2.80, 0.92, 0.86, 0.95, 0.70], hspace=0.42)
-
-    plot_panel_a_original(fig, outer[0, 0], deletion_df, coverage_df, gtf_path)
-
-    ax_b = fig.add_subplot(outer[1, 0])
-    plot_cnv_panel(ax_b, cnv_df, cnv_burden, cnv_stats, chrom_sizes, deletion_df)
-
-    plot_sv_panel(fig, outer[2, 0], sv_burden, sv_stats)
-
-    gs_d = GridSpecFromSubplotSpec(1, 2, subplot_spec=outer[3, 0], width_ratios=[1.0, 1.0], wspace=0.25)
-    ax_d1 = fig.add_subplot(gs_d[0, 0])
-    ax_d2 = fig.add_subplot(gs_d[0, 1])
-    plot_methylation_decay_main(ax_d1, methyl_curve, "5prime")
-    plot_methylation_decay_main(ax_d2, methyl_curve, "3prime")
-    ax_d1.text(-0.16, 1.10, "D.", transform=ax_d1.transAxes, fontsize=13, fontweight="bold", ha="left", va="bottom")
-    ax_d1.text(0.0, 1.10, "Limited evidence for breakpoint-proximal methylation decay", transform=ax_d1.transAxes, fontsize=13, fontweight="bold", ha="left", va="bottom")
-    handles = [
-        Line2D([0], [0], color=GROUP_COLORS["PWS_DEL"], lw=2.0, marker="o", label="PWS-DEL"),
-        Line2D([0], [0], color=GROUP_COLORS["AS_DEL"], lw=2.0, marker="o", label="AS-DEL"),
-        Line2D([0], [0], color=GROUP_COLORS["PWS_mUPD"], lw=1.8, marker="o", ls="--", label="PWS-UPD BP-matched"),
-    ]
-    ax_d2.legend(handles=handles, loc="upper right", frameon=False, fontsize=8.0)
-
-    ax_e = fig.add_subplot(outer[4, 0])
-    plot_effect_forest(ax_e, methyl_effect)
-
-    fig.savefig(out_png, dpi=300, bbox_inches="tight", facecolor="white")
-    fig.savefig(out_pdf, bbox_inches="tight", facecolor="white")
-    plt.close(fig)
-
-
-def render_supplementary_coverage_figure(
-    out_png: Path,
-    out_pdf: Path,
-    deletion_df: pd.DataFrame,
-    coverage_df: pd.DataFrame,
-    gtf_path: Path,
-) -> None:
-    fig = plt.figure(figsize=(18.0, 13.5), constrained_layout=False)
-    outer = GridSpec(1, 1, figure=fig)
-    plot_panel_a_original(fig, outer[0, 0], deletion_df, coverage_df, gtf_path)
-    fig.suptitle("Supplementary Figure. Full chr15 coverage tracks for all deletion carriers", x=0.01, y=0.995, ha="left", fontsize=13, fontweight="bold")
-    fig.savefig(out_png, dpi=300, bbox_inches="tight", facecolor="white")
-    fig.savefig(out_pdf, bbox_inches="tight", facecolor="white")
-    plt.close(fig)
-
-
-def write_report(
-    out_path: Path,
-    deletion_df: pd.DataFrame,
-    cnv_burden: pd.DataFrame,
-    cnv_stats: pd.DataFrame,
-    sv_stats: pd.DataFrame,
-    methyl_effect: pd.DataFrame,
-) -> None:
-    count_stats = cnv_stats[cnv_stats["metric"] == "nonchr15_large_cnv_count"].iloc[0]
-    total_stats = cnv_stats[cnv_stats["metric"] == "nonchr15_large_cnv_total_mb"].iloc[0]
-    sv_total = sv_stats[sv_stats["metric"] == "TOTAL_COUNT"].iloc[0]
-    sv_span = sv_stats[sv_stats["metric"] == "TOTAL_SPAN_MB"].iloc[0]
-    bnd_stat = sv_stats[sv_stats["metric"] == "BND"].iloc[0]
-    atypical = deletion_df.loc[deletion_df["deletion_type"] == "atypical", "patient_id"].tolist()
-    lines = []
-    lines.append("# Figure 5 v7 report\n")
-    lines.append("## Revised plotting strategy\n")
-    lines.append("- Build the main figure around a single message: chr15q11-q13 deletion architecture is clear, whereas genome-wide CNV/SV burden and breakpoint-aligned methylation effects are modest.")
-    lines.append("- Move dense full-sample chr15 coverage tracks out of the main figure and into a supplementary companion panel.")
-    lines.append("- Keep only sample-level burden summaries that are interpretable at a glance: chr15 deletion size, non-chr15 large CNV burden, total SV count, and total SV span.")
-    lines.append("- Treat PWS-UPD as a breakpoint-coordinate-matched descriptive reference rather than as a true breakpoint-flanking deletion analysis.\n")
-    lines.append("## Figure layout\n")
-    lines.append("- Panel A: chr15 HiFi coverage and deletion classes using the v1-style coverage track layout.")
-    lines.append("- Panel B: single Manhattan-style CNV panel with chr15 highlighted and compact non-chr15 burden statistics.")
-    lines.append("- Panel C: total SV count and total SV span per sample, with p-values displayed in a separate header band above the plots.")
-    lines.append("- Panel D: breakpoint-aligned methylation difference versus controls across 0-10, 10-25, 25-50, and 50-100 kb bins.")
-    lines.append("- Panel E: forest-style near-versus-far breakpoint methylation effect summary.")
-    lines.append("- Supplementary coverage figure: full chr15 HiFi coverage tracks for all deletion carriers.\n")
-    lines.append("## Panel-specific recommendations implemented\n")
-    lines.append("- Panel A retains the coverage-track view but uses cleaner left-side labels and spacing.")
-    lines.append("- Panel B now uses one condensed Manhattan-style panel with group-colored chr15 deletion points, separated sample callouts, and the chr15 label above the plotting area.")
-    lines.append("- Panel C now keeps only total count and total span, and moves p-values into a dedicated header band rather than inside the plotting panels.")
-    lines.append("- Panels D-E use conservative language and emphasize effect sizes, confidence intervals, and null-crossing intervals rather than implying strong distance-decay.")
-    lines.append("- Multiple-testing correction is applied across SV metrics and across the four formal methylation near-versus-far tests.\n")
-    lines.append("## Revised script structure\n")
-    lines.append("1. Load existing Figure 5 input tables and methylation file inventory.")
-    lines.append("2. Recompute sample-level non-chr15 CNV burden and SV burden statistics.")
-    lines.append("3. Re-bin the existing breakpoint-coordinate-aligned methylation table into distance-decay intervals.")
-    lines.append("4. Build distance-bin summaries, reproducible permutation/sign-flip statistics, and bootstrap confidence intervals.")
-    lines.append("5. Render a simplified main figure plus a supplementary full-coverage figure and write analysis tables and narrative report.\n")
-    lines.append("## Suggested panel titles\n")
-    lines.append("- A. chr15 HiFi coverage and deletion classes")
-    lines.append("- B. chr15 deletion dominates large CNV signal")
-    lines.append("- C. Global SV burden does not clearly separate diagnostic groups")
-    lines.append("- D. Limited evidence for breakpoint-proximal methylation decay")
-    lines.append("- E. Near-versus-far breakpoint methylation effects are small\n")
-    lines.append("## Key quantitative observations\n")
-    lines.append(
-        f"- Non-chr15 CNV count burden remains weakly separated across groups "
-        f"(`permutation p={format_pvalue(count_stats['exact_permutation_p'])}`, "
-        f"`q={format_pvalue(count_stats['q_value'])}`, `epsilon^2={count_stats['epsilon_squared']:.2f}`)."
-    )
-    lines.append(
-        f"- Non-chr15 CNV total span is similarly non-dominant "
-        f"(`permutation p={format_pvalue(total_stats['exact_permutation_p'])}`)."
-    )
-    lines.append(
-        f"- Total SV count does not separate groups strongly "
-        f"(`p={format_pvalue(sv_total['exact_permutation_p'])}`, `q={format_pvalue(sv_total['q_value'])}`, "
-        f"`epsilon^2={sv_total['epsilon_squared']:.2f}`), and the same is true for total SV span "
-        f"(`p={format_pvalue(sv_span['exact_permutation_p'])}`)."
-    )
-    lines.append(
-        f"- `BND` burden is the only nominal SV signal "
-        f"(`p={format_pvalue(bnd_stat['exact_permutation_p'])}`), but it does not remain significant after FDR "
-        f"(`q={format_pvalue(bnd_stat['q_value'])}`)."
-    )
-    if atypical:
-        lines.append(
-            f"- The deletion architecture remains dominated by recurrent BP1/BP2-to-BP3/BP4-like events with `{', '.join(atypical)}` as the only clearly atypical extended deletion."
-        )
-    lines.append("- Methylation interpretation is intentionally conservative because parental-haplotype assignments are incomplete for most deletion carriers; the v7 analysis uses retained haplotype where labeled and combined methylation otherwise.\n")
-    lines.append("## Suggested caption text\n")
-    lines.append(
-        "Figure 5. Structural deletion architecture, genome-wide structural burden, and breakpoint-associated methylation. "
-        "(A) chr15 deletion intervals are shown schematically per sample with canonical BP1-BP5 guides, separating recurrent BP1/BP2-to-BP3/BP4-like classes from the single atypical extended deletion. "
-        "(B) chr15 deletion size is shown per sample together with non-chr15 large autosomal CNV burden (`>=2 Mb`); canonical chr15 deletions are the dominant CNV events, whereas non-chr15 burden overlaps across groups. "
-        "(C) Global SV burden is summarized as total SV count, total SV span, and a compact type-specific statistics table; no SV burden metric survives FDR correction. "
-        "(D) Breakpoint-aligned methylation is summarized as signed delta methylation relative to matched controls across distance bins from `0-10 kb` to `50-100 kb`. "
-        "(E) Near-versus-far breakpoint methylation effects are summarized per group and breakpoint side. PWS-UPD is shown as a breakpoint-coordinate-matched descriptive reference rather than a true breakpoint-flanking deletion analysis. "
-        "A supplementary panel provides the full chr15 HiFi coverage tracks for all deletion carriers. Across panels, the figure supports a recurrent chr15 structural mechanism with limited evidence that global genome-wide CNV/SV burden or broad breakpoint-flanking methylation change is the primary discriminating signal."
-    )
-    lines.append("\n## Results-ready interpretation template\n")
-    lines.append(
-        "Deletion carriers showed a predominantly recurrent chr15 architecture, with most samples mapping to BP1/BP2-to-BP3/BP4-like classes and a single atypical extended deletion. "
-        "Outside the canonical chr15 event, large autosomal CNV burden did not separate groups strongly (`permutation p="
-        f"{format_pvalue(count_stats['exact_permutation_p'])}` for count burden), and genome-wide SV burden showed similarly shallow differences (`total SV count p={format_pvalue(sv_total['exact_permutation_p'])}`; all SV burden `q>=0.05`). "
-        "Breakpoint-coordinate-aligned methylation differences relative to controls remained small overall and were most consistent with weak, local deviations rather than a broad or uniform epigenetic bleed effect. "
-        "The UPD sample was analyzed only at canonical breakpoint-matched coordinates and is therefore interpreted descriptively rather than as evidence for true breakpoint-flanking methylation change."
-    )
-    lines.append("\n## Methylation effect summary\n")
-    for _, row in methyl_effect.iterrows():
-        side_label = row["breakpoint_side"].replace("prime", "'")
-        lines.append(
-            f"- {row['group_label']} {side_label}: near `|Δ|={row['near_abs_delta_mean']:.3f}`, "
-            f"far `|Δ|={row['far_abs_delta_mean']:.3f}`, near-minus-far `{format_effect(row['near_minus_far_abs_delta'])}`, "
-            f"p={format_pvalue(row['exact_signflip_p'])}, q={format_pvalue(row['q_value'])}; {row['note']}"
-        )
-    out_path.write_text("\n".join(lines) + "\n")
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--outdir", type=Path, default=DEFAULT_OUTDIR)
-    parser.add_argument(
-        "--table-dir",
-        type=Path,
-        default=None,
-        help="Directory containing the required Figure5 input tables. Defaults only to OUTDIR/tables.",
-    )
-    parser.add_argument("--fasta", type=Path, default=DEFAULT_FASTA)
-    parser.add_argument("--gtf", type=Path, default=DEFAULT_GTF)
-    return parser.parse_args()
-
-
-def main() -> None:
-    args = parse_args()
-    outdir = ensure_dir(args.outdir)
-    tables_dir = ensure_dir(outdir / "tables")
-    figures_dir = ensure_dir(outdir / "figures")
-    reports_dir = ensure_dir(outdir / "reports")
-    input_tables_dir = resolve_input_table_dir(outdir, args.table_dir)
-
-    deletion_df = prepare_deletion_panel_data(pd.read_csv(input_tables_dir / "Figure5A_deletion_breakpoint_characterization.tsv", sep="\t"))
-    coverage_df = pd.read_csv(input_tables_dir / "Figure5A_haplotype_coverage_tracks.tsv.gz", sep="\t")
-    cnv_df = pd.read_csv(input_tables_dir / "Figure5B_genomewide_cnv_calls.tsv.gz", sep="\t")
-    sv_calls_df = pd.read_csv(input_tables_dir / "Figure5C_sv_calls.tsv.gz", sep="\t")
-    sv_burden_df = pd.read_csv(input_tables_dir / "Figure5C_sv_burden_by_sample.tsv", sep="\t")
-    methyl_profile_df = pd.read_csv(input_tables_dir / "Figure5D_breakpoint_flanking_methylation_profile.tsv.gz", sep="\t")
-
-    cnv_burden, cnv_stats = prepare_cnv_burden(cnv_df)
-    sv_burden, sv_stats = prepare_sv_burden(sv_burden_df, sv_calls_df)
-    methyl_bins, methyl_curve, methyl_effect = prepare_methylation_distance_decay(methyl_profile_df)
-    chrom_sizes = load_chrom_sizes(args.fasta)
-
-    deletion_df.to_csv(tables_dir / "Figure5_v7_chr15_deletion_classes.tsv", sep="\t", index=False)
-    cnv_burden.to_csv(tables_dir / "Figure5_v7_nonchr15_cnv_burden.tsv", sep="\t", index=False)
-    cnv_stats.to_csv(tables_dir / "Figure5_v7_nonchr15_cnv_stats.tsv", sep="\t", index=False)
-    sv_burden.to_csv(tables_dir / "Figure5_v7_sv_burden_sample_level.tsv", sep="\t", index=False)
-    sv_stats.to_csv(tables_dir / "Figure5_v7_sv_stats.tsv", sep="\t", index=False)
-    methyl_bins.to_csv(tables_dir / "Figure5_v7_methylation_distance_bins.tsv", sep="\t", index=False)
-    methyl_curve.to_csv(tables_dir / "Figure5_v7_methylation_distance_decay_summary.tsv", sep="\t", index=False)
-    methyl_effect.to_csv(tables_dir / "Figure5_v7_methylation_effect_summary.tsv", sep="\t", index=False)
-
-    render_figure(
-        figures_dir / "Figure5_v7.png",
-        figures_dir / "Figure5_v7.pdf",
-        deletion_df,
-        coverage_df,
-        cnv_df,
-        cnv_burden,
-        cnv_stats,
-        chrom_sizes,
-        sv_burden,
-        sv_stats,
-        methyl_curve,
-        methyl_effect,
-        args.gtf,
-    )
-    render_supplementary_coverage_figure(
-        figures_dir / "Figure5_v7_supplementary_coverage.png",
-        figures_dir / "Figure5_v7_supplementary_coverage.pdf",
-        deletion_df,
-        coverage_df,
-        args.gtf,
-    )
-    write_report(
-        reports_dir / "Figure5_v7_report.md",
-        deletion_df,
-        cnv_burden,
-        cnv_stats,
-        sv_stats,
-        methyl_effect,
-    )
+    cis = paths_lib.import_analysis_package()
+    cohort = cohort_lib.load(paths.metadata)
+    groups = cohort.groups_present()
+    dels, junctions = deletions.deletion_table(paths, cohort)
+    extra = [{"sample_id": s, "label": cohort.label(s), "group": cohort.group(s)} for s in cohort.of("PWS-mUPD")]
+    cn, cn_source = cn_strips(paths, list(dels["sample_id"]) + [e["sample_id"] for e in extra])
+    edges = edge_shifts(dels)
+    cnv, n2 = cnv_calls(paths, cohort)
+    other = cnv[(cnv["size_bp"] >= CNV_MIN) & ~cnv["defining_lesion"] & ~cnv["chrom"].isin(["chrX", "chrY"])]
+    burden = pd.DataFrame({"sample_id": list(cohort.samples), "group": [cohort.group(s) for s in cohort.samples]})
+    agg = other.groupby("sample_id").agg(other_cnv_ge2mb_count=("size_bp", "size"),
+                                         other_cnv_ge2mb_total_mb=("size_bp", lambda x: x.sum() / 1e6))
+    burden = burden.merge(agg, on="sample_id", how="left").fillna({"other_cnv_ge2mb_count": 0, "other_cnv_ge2mb_total_mb": 0})
+    cnv_stats = group_tests(burden, ["other_cnv_ge2mb_count", "other_cnv_ge2mb_total_mb"], groups)
+    sv, n3 = sv_burden(paths, cohort)
+    sv_stats = group_tests(sv, ["TOTAL_COUNT", "TOTAL_SPAN_MB", "DEL", "INS", "DUP", "INV", "BND"], groups) \
+        if len(sv) else pd.DataFrame()
+    flank = flank_table(paths, cohort, dels, cis)
+    effects = flank_effects(flank)
+    blocks, _ = ann.sd_blocks(paths)
+    genes = ann.landmark_genes(paths, *PLOT)
+    lens = readers.fai_lengths(paths.fai()) or readers.CHM13_LENGTHS
+    meta = {"groups": groups, "chrom_lengths": {c: lens[c] for c in readers.CHM13_LENGTHS if c in lens},
+            "notes": n2 + n3, "cn_source": cn_source, "extra_rows": extra}
+    t = {"deletions": dels, "junctions": junctions, "cn": cn, "sd_blocks": blocks, "genes": genes, "edges": edges,
+         "cnv": cnv, "cnv_burden": burden, "cnv_stats": cnv_stats, "sv": sv, "sv_stats": sv_stats, "flank": flank,
+         "effects": effects}
+    for k, v in names.items():
+        style.write_table(t[k], outdir, v)
+    (outdir / "tables" / "Figure5_meta.json").write_text(json.dumps(meta, indent=1))
+    paths_out = render(outdir, t, meta)
+    print(report(outdir, t, meta, meta["notes"], paths_out))
 
 
 if __name__ == "__main__":

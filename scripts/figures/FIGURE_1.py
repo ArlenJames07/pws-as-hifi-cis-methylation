@@ -4353,10 +4353,11 @@ def _convex_hull(points: list[tuple[float, float]]) -> list[tuple[float, float]]
 def draw_panel_c(
     ax: plt.Axes,
     deletion_profile_rows: list[dict[str, Any]],
+    panel_label: str = "C",
 ) -> None:
     """Compare each retained deletion track directly with control chromosomes."""
     ax.set_title(
-        "C. Retained methylation tracks versus control chromosomes",
+        f"{panel_label}. Retained methylation tracks versus control chromosomes",
         fontsize=fs(10.2), loc="left", pad=12, weight="bold",
     )
     deletion_rows = [
@@ -5203,8 +5204,7 @@ def create_main_figure(
     """Main publication Figure 1.
 
     A = complete-cohort heatmap plus one representative ModBAM profile per block
-    B = cohort-wide chromosome-15 copy-number/deletion track
-    C = deletion-span methylation profile classification against empirical
+    B = deletion-span methylation profile classification against empirical
         maternal-like and paternal-like control profiles
     """
     plt.rcParams.update(
@@ -5220,10 +5220,10 @@ def create_main_figure(
         }
     )
 
-    fig = plt.figure(figsize=(19.0, 18.2), constrained_layout=False)
+    fig = plt.figure(figsize=(19.0, 15.8), constrained_layout=False)
     outer = GridSpec(
         3, 1, figure=fig,
-        height_ratios=[1.85, 1.0, 0.16],
+        height_ratios=[1.85, 0.86, 0.16],
         hspace=0.25,
     )
 
@@ -5295,28 +5295,14 @@ def create_main_figure(
         wrap=True,
     )
 
-    bottom = outer[1].subgridspec(
-        1, 2, width_ratios=[0.52, 0.48], wspace=0.16
-    )
-
-    panel_b = bottom[0, 0].subgridspec(
-        2, 1, height_ratios=[0.24, 1.0], hspace=0.025
-    )
-    ax_b_genes = fig.add_subplot(panel_b[0, 0])
-    draw_panel_b_gene_track(ax_b_genes)
-    ax_b = fig.add_subplot(panel_b[1, 0], sharex=ax_b_genes)
-    draw_cohort_cnv_track(
-        ax_b, structural_by_sample, show_legend=False, show_title=False
-    )
-
-    ax_c = fig.add_subplot(bottom[0, 1])
+    ax_b = fig.add_subplot(outer[1])
     draw_panel_c(
-        ax_c,
+        ax_b,
         deletion_profile_rows,
+        panel_label="B",
     )
 
-    # B and C encode the same molecular mechanisms. A single dedicated legend
-    # band keeps both plotting areas unobstructed and preserves panel widths.
+    # A dedicated legend band keeps the classification panel unobstructed.
     legend_ax = fig.add_subplot(outer[2])
     legend_ax.axis("off")
     legend_handles = [
@@ -5357,7 +5343,7 @@ def create_main_figure(
     ]
     legend_ax.legend(
         handles=template_handles,
-        title="Panel C classification",
+        title="Panel B classification",
         frameon=False,
         loc="upper right",
         bbox_to_anchor=(0.98, 1.0),
@@ -5368,7 +5354,7 @@ def create_main_figure(
     )
     legend_ax.text(
         0.5, 0.02,
-        "Panel C score = (RMSE to P − RMSE to M) / (RMSE to P + RMSE to M); positive is maternal-like, negative is paternal-like; | score | < 0.05 is uncertain.",
+        "Panel B score = (RMSE to P − RMSE to M) / (RMSE to P + RMSE to M); positive is maternal-like, negative is paternal-like; | score | < 0.05 is uncertain.",
         ha="center", va="bottom", fontsize=fs(5.7), color="#666666",
     )
 
@@ -5945,9 +5931,9 @@ def write_report(
     ]
     lines += [
         "",
-        "### Deletion-span parental-profile classification (Panel C)",
+        "### Deletion-span parental-profile classification (Panel B)",
         "",
-        "Panel C asks whether the methylation track retained inside each "
+        "Panel B asks whether the methylation track retained inside each "
         "participant-specific CN deletion resembles a maternal or paternal "
         "chromosome. Unaffected-control haplotypes are first anchored as M-like "
         "or P-like by their IC state. At each deletion span, a CpG enters the "
@@ -5960,7 +5946,7 @@ def write_report(
         "(RMSE_P + RMSE_M)`: positive values are M-like and negative values are "
         f"P-like; absolute scores below {DELETION_PROFILE_MIN_SCORE_MAGNITUDE:.2f} "
         "are called uncertain. DiGeorge haplotypes are held out from training and "
-        "retained in the source table as supplementary validation; Panel C itself "
+        "retained in the source table as supplementary validation; Panel B itself "
         "shows only the unaffected-control chromosomes and deletion-sample tracks.",
         "",
         "#### Retained chromosome within each sample-specific deletion",
@@ -6666,9 +6652,8 @@ def main() -> None:
         "regions":{"domain":[CHROM,DOMAIN_START,DOMAIN_END],"PWS_AS_IC":[CHROM,PWS_IC_START,PWS_IC_END],"modbam_display":MODBAM_PLOT_REGION},
         "figure_layout":{
             "panel_a":"complete-cohort IC methylation heatmap plus one vertically matched ModBAM representative per cohort block",
-            "panel_b":"cohort-wide chr15 copy-number/deletion track with curated gene and PWS/AS ICR annotation",
-            "panel_c":"each retained deletion-sample methylation track compared directly with unaffected-control maternal-like and paternal-like chromosome profiles",
-            "shared_legend":"external legend band below panels B and C",
+            "panel_b":"each retained deletion-sample methylation track compared directly with unaffected-control maternal-like and paternal-like chromosome profiles",
+            "shared_legend":"external legend band below panel B",
             "png_dpi":PUBLICATION_DPI,
             "supplementary_S1":"per-sample CpG methylation tracks around the IC",
             "supplementary_S2":"sequencing depth and haplotype-resolution QC",

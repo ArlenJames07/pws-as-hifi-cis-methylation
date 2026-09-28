@@ -1,50 +1,71 @@
 #!/usr/bin/env python3
+"""
+Figure 2 -- Reciprocal parental methylation architecture across the chromosome 15 imprinted domain.
+
+Built from the new analysis outputs (nothing is recomputed from raw data):
+  a  retained-copy methylation per participant and 1-kb window in the common reciprocal CN=1
+     interval (analysis 03), with the PWS-mUPD genome and the biparental mean below
+     (analysis 01 window matrix)
+  b  parental contrast at two scales on one axis: 1-kb CpG windows, PWS-DEL maternal-retained
+     minus AS-DEL paternal-retained, 21-kb median with participant bootstrap (analysis 03), and
+     repeat elements in 250-kb bins, maternal minus paternal with the envelope of all label
+     permutations (scripts/duplicons 07); the largest methylation domain (duplicons 08) is shaded
+  c  the domain tested in each genome: (inside - outside) minus the biparental median, for
+     CpG windows (analysis 01) and repeat elements (duplicons 07); PWS-mUPD took no part in
+     finding the domain
+  d  prespecified regional contrasts with bootstrap intervals and sensitivity flags (analysis 03)
+  e  phase-invariant allelic methylation |H1 - H2| on intact chromosomes (analysis 03)
+Supplementary S2A (retained-copy profiles) and S2B (depth and CpG-composition robustness).
+
+Inputs : results/analysis/{01_evidence_matrix,03_cis_architecture}/..., analysis/annotation_genes.tsv,
+         results/08_duplicons/{repeat_methylation,followup}/... (panels b and c; skipped if absent)
+Outputs: results/07_figures/figure_2/{figures,tables,reports}/
+
+Usage: python3 scripts/figures/FIGURE_2.py [--results DIR] [--outdir DIR] [--domain START-END]
+"""
 from __future__ import annotations
 
+import argparse
+import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-import matplotlib
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from figlib import cohort as cohort_lib  # noqa: E402
+from figlib import paths as paths_lib  # noqa: E402
+from figlib import stats  # noqa: E402
+from figlib import style  # noqa: E402
 
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
-from matplotlib.lines import Line2D
-from matplotlib.patches import Patch, Rectangle
+import matplotlib.pyplot as plt  # noqa: E402
+from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec  # noqa: E402
+from matplotlib.lines import Line2D  # noqa: E402
+from matplotlib.patches import Patch, Rectangle  # noqa: E402
 
+# set in main() from the command line
+INPUTS: dict[str, Path] = {}
+OUTPUT_DIR = Path(".")
+ANALYSIS_REPORT_PATH = Path(".")
+DOMAINS = pd.DataFrame()
+REPEAT_BINS = pd.DataFrame()      # duplicons 07: 250-kb bins, raw maternal - paternal and envelope
+SHIFTS = pd.DataFrame()           # per genome: level (CpG / repeat), group, inside, outside, shift
+EXTRA_ROWS = pd.DataFrame()       # analysis 01: PWS-mUPD and biparental-mean combined beta per window
+REPEAT_COLOR = "#8C510A"
 
-# ============================== CONFIGURATION ==============================
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-ANALYSIS_DIR = PROJECT_ROOT / "results" / "analysis"
-CIS_DIR = ANALYSIS_DIR / "03_cis_architecture"
-INPUTS = {
-    "windows": CIS_DIR / "parent_associated_windows.tsv.gz",
-    "window_participants": CIS_DIR / "parent_window_participant_values.tsv.gz",
-    "focal": CIS_DIR / "focal_intervals.tsv",
-    "regions": CIS_DIR / "regional_parent_contrasts.tsv",
-    "regions_by_estimator": CIS_DIR / "regional_parent_contrasts_by_estimator.tsv",
-    "participants": CIS_DIR / "regional_participant_values.tsv.gz",
-    "asm": CIS_DIR / "regional_phase_invariant_asm.tsv",
-    "missingness": CIS_DIR / "participant_missingness.tsv",
-    "core": ANALYSIS_DIR / "01_evidence_matrix" / "common_reciprocal_cn1_core.tsv",
-    "annotation": ANALYSIS_DIR / "annotation_genes.tsv",
-}
-OUTPUT_DIR = PROJECT_ROOT / "results" / "07_figures" / "figure_2"
 MAIN_STEM = "Figure2"
 SUPP_PROFILE_STEM = "Supplementary_Figure_S2A_retained_copy_profiles"
 SUPP_DEPTH_STEM = "Supplementary_Figure_S2B_depth_robustness"
-FORMATS = ("png", "pdf", "svg")
-PNG_DPI = 600
+FORMATS = style.FORMATS
+PNG_DPI = style.DPI
 PAD_INCHES = 0.04
 
-TITLE = "Reciprocal deletions reveal focal parent-associated methylation divergence across 15q11–q13"
+TITLE = "Reciprocal parental methylation architecture across the chromosome 15 imprinted domain"
 PANEL_C_TITLE = "Phase-invariant allelic methylation on intact chromosome 15"
 FIGURE_WIDTH_IN = 7.0
-MAX_EXPORT_WIDTH_IN = 7.09
+MAX_EXPORT_WIDTH_IN = 7.2
 FIGURE_HEIGHT_IN = 7.7
-BASE_FONT = 7.0
+BASE_FONT = style.BASE_FONT
 INSET_RATIO = 2.0
 A_YLIM_FACTOR = 1.6
 FOCAL_LABEL_MERGE_MB = 0.02
@@ -52,15 +73,15 @@ JITTER = 0.07
 JITTER_SEED = 11
 NONEVALUABLE_MIN_BP = 5_000
 
-MATERNAL = "#C8472B"
-PATERNAL = "#2F6DB0"
-TRACE = "#6A2C91"
+MATERNAL = style.MATERNAL
+PATERNAL = style.PATERNAL
+TRACE = style.TRACE
 INCONCLUSIVE = "#8A8A8A"
 RAW = "#CFCFCF"
-INK = "#222222"
-MUTED = "#6B6B6B"
-CONTROL = "#A86F0C"
-DIGEORGE = "#0E8A74"
+INK = style.INK
+MUTED = style.MUTED
+CONTROL = cohort_lib.COLOR["Control"]
+DIGEORGE = cohort_lib.COLOR["DiGeorge"]
 ESTIMATOR_STYLE = {
     "full_depth": ("Full depth", "#222222", "o"),
     "common_depth_downsampled": ("Common-depth downsampled", "#6A2C91", "s"),
@@ -78,7 +99,6 @@ REGION_SHORT = {
 }
 IC_REGION = "PWS/AS imprinting centre"
 BASELINE_REGION = "OCA2 downstream control"
-ANALYSIS_REPORT_PATH = CIS_DIR / "figure2_analysis_report.tsv"
 REPORT_NAME = "Figure2_report.md"
 ASM_EXCESS_THRESHOLD = 0.02
 # ===========================================================================
@@ -123,33 +143,7 @@ def load_inputs() -> dict[str, pd.DataFrame]:
 
 
 def setup_style() -> None:
-    plt.rcParams.update(
-        {
-            "font.family": "DejaVu Sans",
-            "font.size": BASE_FONT,
-            "axes.titlesize": BASE_FONT + 1,
-            "axes.labelsize": BASE_FONT,
-            "xtick.labelsize": BASE_FONT - 0.5,
-            "ytick.labelsize": BASE_FONT - 0.5,
-            "legend.fontsize": BASE_FONT - 0.5,
-            "axes.spines.top": False,
-            "axes.spines.right": False,
-            "axes.linewidth": 0.6,
-            "xtick.major.width": 0.6,
-            "ytick.major.width": 0.6,
-            "xtick.major.size": 2.5,
-            "ytick.major.size": 2.5,
-            "axes.edgecolor": MUTED,
-            "axes.labelcolor": INK,
-            "xtick.color": MUTED,
-            "ytick.color": MUTED,
-            "text.color": INK,
-            "legend.frameon": False,
-            "pdf.fonttype": 42,
-            "svg.fonttype": "none",
-            "figure.facecolor": "white",
-        }
-    )
+    style.setup()
 
 
 def save(fig: plt.Figure, stem: str) -> list[Path]:
@@ -229,6 +223,23 @@ def draw_panel_a(ax: plt.Axes, track: plt.Axes, tables: dict[str, pd.DataFrame],
     for start, end, labels, color in groups:
         ax.text(end + 0.02, limit * 0.93, "\u2013".join([labels[0], labels[-1]]) if len(labels) > 1 else labels[0],
                 ha="left", va="top", fontsize=BASE_FONT - 0.5, color=color, fontweight="bold")
+    for record in DOMAINS.itertuples():
+        lo, hi = max(record.start, common[0]), min(record.end, common[1])
+        if hi > lo:
+            ax.axvspan(mb(lo), mb(hi), color=style.DOMAIN, alpha=0.8, lw=0, zorder=0)
+            direction = str(getattr(record, "direction", "")).replace("_", "-")
+            ax.text(mb(lo) + 0.02, limit * 0.93, f"{direction} repeat domain" if direction not in ("", "nan")
+                    else "repeat methylation domain", ha="left", va="top", fontsize=BASE_FONT - 1.5, color=MUTED)
+    if len(REPEAT_BINS):
+        rb = REPEAT_BINS[(REPEAT_BINS["bin_end"] > common[0]) & (REPEAT_BINS["bin_start"] < common[1])]
+        x = mb((rb["bin_start"] + rb["bin_end"]) / 2)
+        if rb["env_low"].notna().any():
+            ax.fill_between(x, rb["env_low"], rb["env_high"], step="mid", color=REPEAT_COLOR, alpha=0.12, lw=0, zorder=2)
+        ax.step(x, rb["raw_delta"], where="mid", color=REPEAT_COLOR, lw=1.0, zorder=5)
+        sig = rb["p"] <= 0.05
+        ax.scatter(x[sig.to_numpy()], rb.loc[sig, "raw_delta"], s=14, marker="s", color=REPEAT_COLOR, zorder=6)
+        ax.scatter(x[~sig.to_numpy()], rb.loc[~sig, "raw_delta"], s=14, marker="s", facecolor="white",
+                   edgecolor=REPEAT_COLOR, lw=0.8, zorder=6)
     for start, end in nonevaluable_spans(windows):
         ax.add_patch(Rectangle((mb(start), -limit), mb(end) - mb(start), limit * 0.035, color="#BDBDBD", lw=0, zorder=1))
     ax.axhline(0, color=MUTED, lw=0.6, zorder=1)
@@ -260,20 +271,22 @@ def draw_panel_a(ax: plt.Axes, track: plt.Axes, tables: dict[str, pd.DataFrame],
         ax.text(ic_mid, -limit * 0.97, " IC", ha="left", va="bottom", fontsize=BASE_FONT - 0.5, color=INK)
     ax.set_xlim(mb(common[0]), mb(common[1]))
     ax.set_ylim(-limit, limit)
-    ax.set_ylabel("Δβ (PWS − AS)")
+    ax.set_ylabel("maternal − paternal\nmethylation")
     ax.tick_params(labelbottom=False)
     ax.text(1.005, 0.97, "maternal-\nretained\nhigher", transform=ax.transAxes, color=MATERNAL, fontsize=BASE_FONT - 1,
             va="top", ha="left")
     ax.text(1.005, 0.03, "paternal-\nretained\nhigher", transform=ax.transAxes, color=PATERNAL, fontsize=BASE_FONT - 1,
             va="bottom", ha="left")
     legend = [
-        Line2D([], [], color=RAW, lw=1.2, label="1-kb \u0394\u03b2"),
-        Line2D([], [], color=TRACE, lw=1.2, label="21-kb median"),
-        Patch(color=TRACE, alpha=0.2, label="participant bootstrap 95% CI"),
+        Line2D([], [], color=RAW, lw=1.2, label="CpG 1-kb \u0394\u03b2"),
+        Line2D([], [], color=TRACE, lw=1.2, label="21-kb median (bootstrap CI)"),
         Patch(color="#BDBDBD", label="not evaluable"),
-        Line2D([], [], marker="^", ls="none", color=MUTED, ms=3, label="beyond axis"),
     ]
-    ax.legend(handles=legend, loc="lower left", bbox_to_anchor=(0.0, 1.0), ncol=5, fontsize=BASE_FONT - 1,
+    if len(REPEAT_BINS):
+        legend += [Line2D([], [], color=REPEAT_COLOR, marker="s", ms=3.5, lw=1.0,
+                          label="repeat elements, 250 kb (filled p \u2264 0.05)"),
+                   Patch(color=REPEAT_COLOR, alpha=0.12, label="label-permutation envelope")]
+    ax.legend(handles=legend, loc="lower left", bbox_to_anchor=(0.0, 1.0), ncol=3, fontsize=BASE_FONT - 1.5,
               handlelength=1.4, columnspacing=1.0, borderaxespad=0.2)
     draw_track(track, tables, common)
 
@@ -318,15 +331,23 @@ def draw_track(ax: plt.Axes, tables: dict[str, pd.DataFrame], common: tuple[int,
         ax.add_patch(Rectangle((start, 0.70), end - start, 0.14, color="#C9C9C9", lw=0))
         items.append(((start + end) / 2, record.label, MUTED))
     items.sort()
-    bbox = ax.get_position()
-    axis_inches = bbox.width * ax.figure.get_figwidth()
-    char_width = (BASE_FONT - 1) * 0.6 / 72 * (high - low) / axis_inches
+    ax.set_xlim(low, high)
     centres = np.array([item[0] for item in items])
-    widths = np.array([len(item[1]) * char_width + 3 * char_width for item in items])
+    texts = [ax.text(c, 0.08, label, ha="center", va="bottom", fontsize=BASE_FONT - 1, color=color)
+             for c, label, color in items]
+    # measured label widths in data units; shrink the font when the labels cannot all fit
+    renderer = ax.figure.canvas.get_renderer()
+    data_per_px = (high - low) / max(1.0, ax.get_window_extent(renderer).width)
+    for _ in range(4):
+        widths = np.array([t.get_window_extent(renderer).width * data_per_px for t in texts]) * 1.12
+        if widths.sum() <= (high - low) * 0.98 or texts[0].get_fontsize() <= BASE_FONT - 2.5:
+            break
+        for t in texts:
+            t.set_fontsize(t.get_fontsize() - 0.5)
     positions = repel(centres, widths, low, high)
-    for (centre, label, color), position in zip(items, positions):
-        ax.text(position, 0.08, label, ha="center", va="bottom", fontsize=BASE_FONT - 1, color=color)
-        if abs(position - centre) > char_width:
+    for t, centre, position, width in zip(texts, centres, positions, widths):
+        t.set_x(position)
+        if abs(position - centre) > width * 0.05:
             ax.plot([centre, centre, position], [0.64, 0.5, 0.36], color="#9A9A9A", lw=0.4)
     ic = annotation[annotation["label"].eq("IC")]
     if not ic.empty:
@@ -354,8 +375,9 @@ def split_axes(fig: plt.Figure, spec, use_inset: bool, width_ratio: float = 0.24
 
 
 def needs_inset(values: pd.Series, others: pd.Series) -> bool:
-    other_extent = np.nanmax(np.abs(others.to_numpy(float))) if len(others) else np.nan
-    extent = np.nanmax(np.abs(values.to_numpy(float))) if len(values) else np.nan
+    o, v = np.abs(others.to_numpy(float)), np.abs(values.to_numpy(float))
+    other_extent = np.max(o[np.isfinite(o)]) if np.isfinite(o).any() else np.nan
+    extent = np.max(v[np.isfinite(v)]) if np.isfinite(v).any() else np.nan
     return bool(np.isfinite(extent) and np.isfinite(other_extent) and extent > INSET_RATIO * other_extent)
 
 
@@ -437,7 +459,8 @@ def draw_panel_c(fig: plt.Figure, spec, tables: dict[str, pd.DataFrame], order: 
     use_inset = needs_inset(ic_values, other_values)
     main, inset = split_axes(fig, spec, use_inset)
     rng = np.random.default_rng(JITTER_SEED)
-    cohorts = (("Control", CONTROL, "o", -0.17, "Unaffected control"), ("DiGeorge", DIGEORGE, "^", 0.17, "DiGeorge"))
+    cohorts = (("Control", CONTROL, cohort_lib.MARKER["Control"], -0.17, "Control"),
+               ("DiGeorge", DIGEORGE, cohort_lib.MARKER["DiGeorge"], 0.17, "22q11.2DS"))
     totals = {}
     for cohort, color, marker, offset, _ in cohorts:
         subset = participants[participants["cohort"].eq(cohort)]
@@ -485,8 +508,10 @@ def draw_panel_c(fig: plt.Figure, spec, tables: dict[str, pd.DataFrame], order: 
         right.text(1.04, ypos[region], f"{counts[0]}/{counts[1]}", transform=right.get_yaxis_transform(),
                    ha="left", va="center", fontsize=BASE_FONT - 1, color=INK)
     legend = [
-        Line2D([], [], marker="o", ls="none", mfc="white", mec=CONTROL, ms=4, label=f"Unaffected control (n={totals['Control']})"),
-        Line2D([], [], marker="^", ls="none", mfc="white", mec=DIGEORGE, ms=4, label=f"DiGeorge (n={totals['DiGeorge']})"),
+        Line2D([], [], marker=cohort_lib.MARKER["Control"], ls="none", mfc="white", mec=CONTROL, ms=4,
+               label=f"Control (n={totals['Control']})"),
+        Line2D([], [], marker=cohort_lib.MARKER["DiGeorge"], ls="none", mfc="white", mec=DIGEORGE, ms=4,
+               label=f"22q11.2DS (n={totals['DiGeorge']})"),
         Line2D([], [], color=MUTED, lw=2.0, marker="|", ms=0, label="group mean (equal weight)"),
         Line2D([], [], color=DIGEORGE, lw=1.4, label="95% participant bootstrap,\ndescriptive (only n≥3)"),
     ]
@@ -495,55 +520,118 @@ def draw_panel_c(fig: plt.Figure, spec, tables: dict[str, pd.DataFrame], order: 
     return main
 
 
-def render_main(tables: dict[str, pd.DataFrame], common: tuple[int, int]) -> list[Path]:
-    fig = plt.figure(figsize=(FIGURE_WIDTH_IN, FIGURE_HEIGHT_IN))
-    outer = GridSpec(4, 1, figure=fig, height_ratios=[2.0, 0.5, 1.05, 2.75], hspace=0.0,
-                     left=0.235, right=0.87, top=0.9, bottom=0.16)
-    ax_a = fig.add_subplot(outer[0])
-    track = fig.add_subplot(outer[1], sharex=ax_a)
-    lower = GridSpecFromSubplotSpec(1, 2, subplot_spec=outer[3], width_ratios=[1.0, 0.8], wspace=0.32)
+def draw_validation(fig, spec) -> list:
+    """Panel c: per-genome shift of the domain at two levels."""
+    levels = [lv for lv in ("CpG windows (analysis 01)", "repeat elements (duplicons 07)")
+              if len(SHIFTS) and (SHIFTS["level"] == lv).any()]
+    if not levels:
+        ax = fig.add_subplot(spec)
+        ax.text(0.5, 0.5, "domain validation not available\n(run scripts/duplicons 07-08)", ha="center",
+                va="center", transform=ax.transAxes, color=MUTED)
+        ax.set_axis_off()
+        return [ax]
+    sub = GridSpecFromSubplotSpec(1, len(levels), subplot_spec=spec, wspace=0.35)
+    order = ["Biparental", "PWS-mUPD", "PWS-DEL", "AS-DEL"]
+    colors = {"Biparental": style.BIPARENTAL, "PWS-mUPD": cohort_lib.COLOR["PWS-mUPD"],
+              "PWS-DEL": cohort_lib.COLOR["PWS-DEL"], "AS-DEL": cohort_lib.COLOR["AS-DEL"]}
+    markers = {"Biparental": "o", "PWS-mUPD": cohort_lib.MARKER["PWS-mUPD"], "PWS-DEL": cohort_lib.MARKER["PWS-DEL"],
+               "AS-DEL": cohort_lib.MARKER["AS-DEL"]}
+    rng = np.random.default_rng(5)
+    axes = []
+    for k, lv in enumerate(levels):
+        ax = fig.add_subplot(sub[k], sharey=axes[0] if axes else None)
+        d = SHIFTS[SHIFTS["level"] == lv]
+        for i, g in enumerate(order):
+            v = d.loc[d["group"] == g, "shift"].to_numpy()
+            if not len(v):
+                continue
+            ax.scatter(i + rng.uniform(-0.12, 0.12, len(v)), v, s=16, marker=markers[g], color=colors[g],
+                       edgecolor="white", lw=0.4, zorder=3)
+            if len(v) > 1:
+                ax.hlines(np.median(v), i - 0.28, i + 0.28, color=INK, lw=1.1, zorder=4)
+        ax.axhline(0, color=MUTED, lw=0.6)
+        ax.set_xticks(range(len(order)))
+        ax.set_xticklabels(["Bipar.", "mUPD", "PWS", "AS"], fontsize=BASE_FONT - 1)
+        ax.set_xlim(-0.6, len(order) - 0.4)
+        st = SHIFTS.attrs.get(lv, {})
+        ax.set_title(f"{lv}\nPWS vs AS p = {style.fmt_p(st.get('p'))}; mUPD < "
+                     f"{st.get('mupd_below', 0)}/{st.get('n_biparental', 0)} biparental", fontsize=BASE_FONT - 1.5)
+        if k == 0:
+            ax.set_ylabel("domain shift vs\nbiparental genomes")
+        axes.append(ax)
+    return axes
+
+
+def render_main(tables: dict[str, pd.DataFrame], common: tuple[int, int], labels: dict) -> list[Path]:
+    fig = plt.figure(figsize=(FIGURE_WIDTH_IN, 10.5))
+    outer = GridSpec(8, 1, figure=fig, height_ratios=[1.3, 0.62, 1.85, 0.5, 1.0, 1.3, 0.85, 2.3], hspace=0.0,
+                     left=0.2, right=0.9, top=0.94, bottom=0.075)
+    ax_h = fig.add_subplot(outer[0])
+    heatmap(ax_h, tables, common, extra=True, labels=labels)
+    ax_h.tick_params(labelbottom=False)
+    ax_a = fig.add_subplot(outer[2], sharex=ax_h)
+    track = fig.add_subplot(outer[3], sharex=ax_h)
     draw_panel_a(ax_a, track, tables, common)
-    windows = tables["windows"]
-    n_pws = int(windows["pws_n"].max())
-    n_as = int(windows["as_n"].max())
+    mid = GridSpecFromSubplotSpec(1, 2, subplot_spec=outer[5], width_ratios=[1.0, 0.45], wspace=0.15)
+    val_axes = draw_validation(fig, mid[0, 0])
+    leg = fig.add_subplot(mid[0, 1])
+    leg.set_axis_off()
+    handles = [Line2D([], [], marker="o", ls="", ms=5, color=style.BIPARENTAL, label="biparental (Control + 22q11.2DS)")]
+    handles += style.group_legend_handles(["PWS-mUPD", "PWS-DEL", "AS-DEL"])
+    leg.legend(handles=handles, loc="center left", fontsize=BASE_FONT - 1, title="genome", title_fontsize=BASE_FONT - 1)
+    lower = GridSpecFromSubplotSpec(1, 2, subplot_spec=outer[7], width_ratios=[1.0, 0.8], wspace=0.32)
     ax_b, order = draw_panel_b(fig, lower[0, 0], tables)
     ax_c = draw_panel_c(fig, lower[0, 1], tables, order)
+    windows = tables["windows"]
+    n_pws, n_as = int(windows["pws_n"].max()), int(windows["as_n"].max())
     left = 0.012
-    a_top = ax_a.get_position().y1
-    b_top = ax_b.get_position().y1
-    fig.text(left, a_top + 0.03, "a", fontsize=BASE_FONT + 3, fontweight="bold", va="bottom")
-    fig.text(left + 0.028, a_top + 0.03,
-             f"Direct parent-associated contrast in the common reciprocal CN=1 interval (PWS n={n_pws}, AS n={n_as})",
-             fontsize=BASE_FONT + 1, va="bottom")
-    fig.text(left, b_top + 0.035, "b", fontsize=BASE_FONT + 3, fontweight="bold", va="bottom")
-    fig.text(left + 0.028, b_top + 0.035, "Prespecified regional parent-associated effects",
-             fontsize=BASE_FONT + 1, va="bottom")
+    for ax, letter, title, dy in (
+            (ax_h, "a", f"Retained-copy methylation, common CN=1 interval (PWS n={n_pws}, AS n={n_as}); "
+                        f"PWS-mUPD and biparental mean below", 0.008),
+            (ax_a, "b", "Parental contrast of CpGs (1 kb) and repeat elements (250 kb)", 0.042),
+            (val_axes[0], "c", "The domain in each genome: (inside − outside) relative to biparental genomes", 0.035),
+            (ax_b, "d", "Prespecified regional parent-associated effects", 0.032)):
+        top = ax.get_position().y1
+        fig.text(left, top + dy, letter, fontsize=BASE_FONT + 3, fontweight="bold", va="bottom")
+        fig.text(left + 0.028, top + dy, title, fontsize=BASE_FONT + 0.5, va="bottom")
     c_left = ax_c.get_position().x0 - 0.035
-    fig.text(c_left, b_top + 0.035, "c", fontsize=BASE_FONT + 3, fontweight="bold", va="bottom")
-    fig.text(c_left + 0.028, b_top + 0.035, PANEL_C_TITLE.replace(" on intact", "\non intact"),
-             fontsize=BASE_FONT + 1, va="bottom", linespacing=1.1)
-    fig.suptitle(TITLE, x=left, y=0.985, ha="left", fontsize=BASE_FONT + 2, fontweight="bold")
+    b_top = ax_b.get_position().y1
+    fig.text(c_left, b_top + 0.032, "e", fontsize=BASE_FONT + 3, fontweight="bold", va="bottom")
+    fig.text(c_left + 0.028, b_top + 0.032, PANEL_C_TITLE.replace(" on intact", "\non intact"),
+             fontsize=BASE_FONT + 0.5, va="bottom", linespacing=1.1)
+    fig.suptitle(TITLE, x=left, y=0.99, ha="left", fontsize=BASE_FONT + 1.5, fontweight="bold")
     return save(fig, MAIN_STEM)
 
 
-def heatmap(ax: plt.Axes, tables: dict[str, pd.DataFrame], common: tuple[int, int]) -> None:
+def heatmap(ax: plt.Axes, tables: dict[str, pd.DataFrame], common: tuple[int, int], extra: bool = False,
+            labels: dict | None = None) -> None:
     data = tables["window_participants"]
     data = data[data["estimator"].eq("full_depth")]
     wide = data.pivot(index="sample_id", columns="start", values="beta")
     mechanism = data.drop_duplicates("sample_id").set_index("sample_id")["mechanism"]
     rows = sorted(wide.index, key=lambda sample: (mechanism[sample] != "PWS-DEL", sample))
     wide = wide.loc[rows]
+    names = [f"{(labels or {}).get(r, r)} ({'mat.' if mechanism[r] == 'PWS-DEL' else 'pat.'})" for r in rows]
+    if extra and len(EXTRA_ROWS):
+        ex = EXTRA_ROWS.pivot(index="row", columns="start", values="beta").reindex(columns=wide.columns)
+        wide = pd.concat([wide, ex])
+        names += list(ex.index)
     cmap = plt.get_cmap("Purples").copy()
     cmap.set_bad("white")
     image = ax.imshow(np.ma.masked_invalid(wide.to_numpy(float)), aspect="auto", interpolation="nearest",
                       cmap=cmap, vmin=0, vmax=1,
-                      extent=(mb(wide.columns.min()), mb(wide.columns.max() + 1000), len(rows) - 0.5, -0.5))
-    ax.set_yticks(range(len(rows)))
-    ax.set_yticklabels([f"{sample} ({'PWS mat.' if mechanism[sample] == 'PWS-DEL' else 'AS pat.'})" for sample in rows])
-    boundary = sum(mechanism[sample] == "PWS-DEL" for sample in rows) - 0.5
-    ax.axhline(boundary, color=INK, lw=0.8)
+                      extent=(mb(wide.columns.min()), mb(wide.columns.max() + 1000), len(wide) - 0.5, -0.5))
+    ax.set_yticks(range(len(wide)))
+    ax.set_yticklabels(names, fontsize=BASE_FONT - 1.5)
+    n_pws = sum(mechanism[sample] == "PWS-DEL" for sample in rows)
+    ax.axhline(n_pws - 0.5, color=INK, lw=0.8)
+    if len(wide) > len(rows):
+        ax.axhline(len(rows) - 0.5, color=INK, lw=1.4)
+    for tick, name in zip(ax.get_yticklabels(), names):
+        tick.set_color(MATERNAL if "(mat." in name or "mUPD" in name else PATERNAL if "(pat." in name else MUTED)
     bar = plt.colorbar(image, cax=ax.inset_axes([1.01, 0.0, 0.012, 1.0]))
-    bar.set_label("retained-copy β", fontsize=BASE_FONT - 1)
+    bar.set_label("β", fontsize=BASE_FONT - 1)
+    bar.ax.tick_params(labelsize=BASE_FONT - 2)
     ax.set_xlim(mb(common[0]), mb(common[1]))
 
 
@@ -565,12 +653,12 @@ def diploid_lines(ax: plt.Axes, windows: pd.DataFrame, column: str) -> None:
         first = False
 
 
-def render_profiles(tables: dict[str, pd.DataFrame], common: tuple[int, int]) -> list[Path]:
+def render_profiles(tables: dict[str, pd.DataFrame], common: tuple[int, int], labels: dict) -> list[Path]:
     windows = tables["windows"]
     windows = windows[windows["in_common_cn1"].astype(bool)].sort_values("start").reset_index(drop=True)
     fig, axes = plt.subplots(4, 1, figsize=(FIGURE_WIDTH_IN - 0.1, 7.6), sharex=True,
                              gridspec_kw={"height_ratios": [1.6, 1.1, 1.0, 0.8], "hspace": 0.28})
-    heatmap(axes[0], tables, common)
+    heatmap(axes[0], tables, common, labels=labels)
     panel_label(axes[0], "a", "Participant-by-window retained-copy β (full depth; white = not evaluable)", x=-0.12)
     profile_lines(axes[1], windows, "mean_beta_pws_maternal_retained", MATERNAL, "PWS maternal-retained mean β")
     profile_lines(axes[1], windows, "mean_beta_as_paternal_retained", PATERNAL, "AS paternal-retained mean β")
@@ -595,7 +683,7 @@ def render_profiles(tables: dict[str, pd.DataFrame], common: tuple[int, int]) ->
     return save(fig, SUPP_PROFILE_STEM)
 
 
-def render_depth(tables: dict[str, pd.DataFrame]) -> list[Path]:
+def render_depth(tables: dict[str, pd.DataFrame], labels: dict) -> list[Path]:
     by_estimator = tables["regions_by_estimator"]
     regions = tables["regions"].sort_values("display_order")
     order = regions["region_id"].tolist()
@@ -676,10 +764,10 @@ def render_depth(tables: dict[str, pd.DataFrame]) -> list[Path]:
                 ls="none", ms=3.5)
     depth = missing.drop_duplicates("sample_id").set_index("sample_id").loc[samples]
     ax.set_xticks(range(len(samples)))
-    ax.set_xticklabels([f"{sample}\n{'PWS' if depth.loc[sample, 'mechanism'] == 'PWS-DEL' else 'AS'}\n{depth.loc[sample, 'median_retained_copy_depth']:.0f}×"
+    ax.set_xticklabels([f"{labels.get(sample, sample)}\n{'PWS' if depth.loc[sample, 'mechanism'] == 'PWS-DEL' else 'AS'}\n{depth.loc[sample, 'median_retained_copy_depth']:.0f}×"
                         for sample in samples], fontsize=BASE_FONT - 1)
     ax.set_ylabel("fraction of CN=1 windows\nnot evaluable (label: depth)")
-    ax.set_ylim(0, min(1.0, 1.12 * missing["missing_fraction"].max()))
+    ax.set_ylim(0, min(1.0, max(0.05, 1.12 * float(np.nan_to_num(missing["missing_fraction"].max())))))
     panel_label(ax, "e", "Missingness by participant and estimator", x=-0.14)
     windows = tables["windows"]
     windows = windows[windows["evaluable"].astype(bool)]
@@ -810,7 +898,7 @@ def write_markdown_report(tables: dict[str, pd.DataFrame], common: tuple[int, in
         "Parental direction comes only from the deletions, and only inside the common CN=1 interval. "
         "Control and DiGeorge haplotypes (H1/H2) are unoriented, so panel c has no direction.\n")
 
-    add("## 2. Panel a: focal parent-associated divergence\n")
+    add("## 2. Panel b: CpG-level parental contrast and focal intervals\n")
     smooth = windows["delta_rolling_median"].dropna()
     add(f"- Smoothed trace available for {len(smooth):,} windows; median |Δβ| = {smooth.abs().median():.3f}; "
         f"{(smooth.abs() >= 0.10).mean():.1%} of smoothed windows reach |Δβ| ≥ 0.10.")
@@ -846,7 +934,27 @@ def write_markdown_report(tables: dict[str, pd.DataFrame], common: tuple[int, in
         ))
         add("")
 
-    add("## 3. Panel b: prespecified regional effects\n")
+    add("## 3. Panels b and c: repeat elements and the domain in each genome\n")
+    if len(REPEAT_BINS):
+        rb = REPEAT_BINS
+        add(f"Repeat-element bins (scripts/duplicons 07, offset {REPEAT_BINS.attrs.get('offset', 0):+.3f} added back): "
+            f"{int((rb['p'] <= 0.05).sum())} of {len(rb)} bins with label-permutation p <= 0.05.\n")
+        add(md_table(["bin", "maternal − paternal", "envelope", "p"],
+                     [[f"{int(r.bin_start):,}–{int(r.bin_end):,}", fmt(r.raw_delta), f"[{fmt(r.env_low)}, {fmt(r.env_high)}]",
+                       fmt(r.p, signed=False)] for r in rb.itertuples()]))
+        add("")
+    if len(SHIFTS):
+        add("Domain shift per genome = (inside − outside) − median of the biparental genomes; PWS-mUPD did not "
+            "take part in finding the domain.\n")
+        add("```\n" + SHIFTS.attrs.get("note", "") + "\n```\n")
+        add(md_table(["level", "genome", "group", "inside", "outside", "shift"],
+                     [[r.level.split(" (")[0], r.sample_id, r.group, fmt(r.inside, signed=False), fmt(r.outside, signed=False),
+                       fmt(r.shift)] for r in SHIFTS.itertuples()]))
+        add("")
+    else:
+        add("No scripts/duplicons 07-08 outputs: panels b (repeat bins) and c are not drawn.\n")
+
+    add("## 4. Panel d: prespecified regional effects\n")
     rows = []
     for record in regions.itertuples():
         welch = f"[{fmt(getattr(record, 'welch_ci_low', np.nan))}, {fmt(getattr(record, 'welch_ci_high', np.nan))}]"
@@ -877,7 +985,7 @@ def write_markdown_report(tables: dict[str, pd.DataFrame], common: tuple[int, in
             add(f"- **{record.region_id}**: not evaluable in the common CN=1 interval.")
     add("")
 
-    add("## 4. Panel c: phase-invariant allelic methylation on intact chromosome 15\n")
+    add("## 5. Panel e: phase-invariant allelic methylation on intact chromosome 15\n")
     excess = asm_excess(tables)
     rows = []
     for region in order:
@@ -904,7 +1012,7 @@ def write_markdown_report(tables: dict[str, pd.DataFrame], common: tuple[int, in
         f"their own {BASELINE_REGION} value (excess). Intervals are descriptive participant bootstraps, "
         f"shown only for n ≥ 3; controls are descriptive only.\n")
 
-    add("## 5. Agreement between reciprocal deletions and intact chromosomes\n")
+    add("## 6. Agreement between reciprocal deletions and intact chromosomes\n")
     rows = []
     for record in regions.itertuples():
         if record.region_id == BASELINE_REGION:
@@ -925,7 +1033,7 @@ def write_markdown_report(tables: dict[str, pd.DataFrame], common: tuple[int, in
     add(md_table(["Region", "Panel b call", f"Panel c (excess ≥ {ASM_EXCESS_THRESHOLD} in both cohorts)", "Reading"], rows))
     add("")
 
-    add("## 6. Sequencing-depth and CpG-composition robustness\n")
+    add("## 7. Sequencing-depth and CpG-composition robustness\n")
     by_estimator = tables["regions_by_estimator"]
     rows = []
     for region in order:
@@ -952,14 +1060,14 @@ def write_markdown_report(tables: dict[str, pd.DataFrame], common: tuple[int, in
     if ANALYSIS_REPORT_PATH.is_file():
         checks = pd.read_csv(ANALYSIS_REPORT_PATH, sep="\t")
         checks = checks[checks["status"].isin(["pass", "fail"])]
-        add("## 7. Analysis checks\n")
+        add("## 8. Analysis checks\n")
         add(md_table(["Section", "Check", "Result", "Status"],
                      [[r.section, r.item,
                        Path(str(r.value)).name if r.section == "input_validation" and "/" in str(r.value) else str(r.value)[:140],
                        r.status] for r in checks.itertuples()]))
         add("")
 
-    add("## 8. Limitations\n")
+    add("## 9. Limitations\n")
     add(f"- Small groups (PWS n = {n_pws}, AS n = {n_as}, controls n = {cohort_n.get('Control', 0)}): percentile "
         "bootstrap intervals are descriptive and can be narrow; compare them with the Welch intervals.")
     add("- The PWS vs AS contrast also compares two diagnoses and two sets of individuals. Check the flanking "
@@ -974,19 +1082,182 @@ def write_markdown_report(tables: dict[str, pd.DataFrame], common: tuple[int, in
     return path
 
 
-def main() -> None:
+def load_domains(paths, arg: str | None = None) -> pd.DataFrame:
+    """The paternal/maternal repeat-methylation domain (scripts/duplicons 08), largest first."""
+    if arg:
+        a, b = arg.replace(",", "").split("-")
+        return pd.DataFrame([{"start": int(a), "end": int(b)}])
+    path = paths.duplicons / "followup" / "methylation_domains.tsv"
+    if path.is_file() and path.stat().st_size:
+        d = pd.read_csv(path, sep="\t")
+        if {"start", "end"} <= set(d.columns) and len(d):
+            return d.assign(size=d["end"] - d["start"]).sort_values("size", ascending=False)
+    return pd.DataFrame(columns=["start", "end"])
+
+
+def load_repeat_bins(paths) -> pd.DataFrame:
+    d = paths.duplicons / "repeat_methylation"
+    reg_path, val_path = d / "direct_delta_by_region.tsv", d / "validation.tsv"
+    if not reg_path.is_file():
+        return pd.DataFrame()
+    reg = pd.read_csv(reg_path, sep="\t")
+    offset = 0.0
+    if val_path.is_file():
+        val = pd.read_csv(val_path, sep="\t")
+        hit = val[val["quantity"].astype(str).str.startswith("parental offset removed")]
+        if len(hit):
+            offset = float(hit["value"].iloc[0])
+    out = pd.DataFrame({"bin_start": reg["bin_start"], "bin_end": reg["bin_end"],
+                        "raw_delta": reg["observed_median_delta"] + offset})
+    out["env_low"] = reg["permutation_min"] + offset if "permutation_min" in reg else np.nan
+    out["env_high"] = reg["permutation_max"] + offset if "permutation_max" in reg else np.nan
+    out["p"] = reg["permutation_p_two_sided"] if "permutation_p_two_sided" in reg else np.nan
+    out.attrs["offset"] = offset
+    return out.dropna(subset=["raw_delta"])
+
+
+GROUP_OF = {"Control": "Biparental", "DiGeorge": "Biparental", "PWS-mUPD": "PWS-mUPD", "PWS-DEL": "PWS-DEL",
+            "AS-DEL": "AS-DEL"}
+
+
+def _shifts(per: pd.DataFrame, level: str) -> pd.DataFrame:
+    """per: sample_id, group, inside, outside -> + shift relative to the biparental median."""
+    per = per.dropna(subset=["inside", "outside"]).copy()
+    per["in_minus_out"] = per["inside"] - per["outside"]
+    ref = per.loc[per["group"] == "Biparental", "in_minus_out"].median()
+    per["shift"] = per["in_minus_out"] - ref
+    per["level"] = level
+    return per
+
+
+def load_matrix(paths) -> pd.DataFrame:
+    path = paths.analysis / "01_evidence_matrix" / "chr15_window_evidence_matrix.tsv.gz"
+    if not path.is_file():
+        return pd.DataFrame()
+    cols = ["sample_id", "mechanism", "track_kind", "start", "end", "n_cpg", "beta_site_mean"]
+    m = pd.read_csv(path, sep="\t", usecols=cols, low_memory=False)
+    return m[(m["track_kind"] == "combined") & (m["n_cpg"] >= 3)]
+
+
+def cpg_domain_shifts(matrix: pd.DataFrame, core, domain) -> pd.DataFrame:
+    if matrix.empty or domain is None:
+        return pd.DataFrame()
+    ic0, ic1 = 22_691_258 - 5_000, 22_693_494 + 5_000
+    m = matrix[(matrix["start"] >= core[0]) & (matrix["end"] <= core[1])
+               & ~((matrix["end"] > ic0) & (matrix["start"] < ic1))].copy()
+    inside = (m["start"] >= domain[0]) & (m["end"] <= domain[1])
+    per = (m.assign(region=np.where(inside, "inside", "outside"))
+           .groupby(["sample_id", "mechanism", "region"])["beta_site_mean"].mean().unstack("region").reset_index())
+    per["group"] = per["mechanism"].map(GROUP_OF)
+    return _shifts(per.dropna(subset=["group"]), "CpG windows (analysis 01)")
+
+
+def repeat_domain_shifts(paths, domain) -> pd.DataFrame:
+    d = paths.duplicons / "repeat_methylation"
+    ebp_path, summ_path = d / "element_by_participant.tsv.gz", d / "element_summary.tsv"
+    if domain is None or not ebp_path.is_file() or not summ_path.is_file():
+        return pd.DataFrame()
+    summ = pd.read_csv(summ_path, sep="\t", usecols=["element_id", "start", "end", "testable", "in_common_core"])
+    ok = summ["testable"].astype(str).isin(["True", "true", "1"]) & summ["in_common_core"].astype(str).isin(["True", "true", "1"])
+    summ = summ[ok]
+    region = np.where((summ["start"] >= domain[0]) & (summ["end"] <= domain[1]), "inside",
+                      np.where((summ["end"] <= domain[0]) | (summ["start"] >= domain[1]), "outside", "edge"))
+    reg = pd.Series(region, index=summ["element_id"])
+    e = pd.read_csv(ebp_path, sep="\t", low_memory=False)
+    keep = (e["mechanism"].isin(["PWS-DEL", "AS-DEL"]) & (e["measure"] == "retained_combined")) | \
+           (~e["mechanism"].isin(["PWS-DEL", "AS-DEL"]) & (e["measure"] == "scaffold_combined"))
+    e = e[keep & e["element_id"].isin(reg.index)].dropna(subset=["value"])
+    e["region"] = e["element_id"].map(reg)
+    e = e[e["region"] != "edge"]
+    per = e.groupby(["sample_id", "mechanism", "region"])["value"].median().unstack("region").reset_index()
+    per["group"] = per["mechanism"].map(GROUP_OF)
+    return _shifts(per.dropna(subset=["group"]), "repeat elements (duplicons 07)")
+
+
+def extra_rows(matrix: pd.DataFrame, cohort, core) -> pd.DataFrame:
+    if matrix.empty:
+        return pd.DataFrame()
+    m = matrix[(matrix["start"] >= core[0]) & (matrix["end"] <= core[1])]
+    rows = []
+    for s in cohort.of("PWS-mUPD"):
+        d = m[m["sample_id"] == s]
+        rows.append(pd.DataFrame({"row": f"{cohort.label(s)} (2 × mat.)", "start": d["start"], "beta": d["beta_site_mean"]}))
+    bi = m[m["mechanism"].isin(["Control", "DiGeorge"])]
+    if len(bi):
+        n = bi["sample_id"].nunique()
+        g = bi.groupby("start")["beta_site_mean"].mean().reset_index()
+        rows.append(pd.DataFrame({"row": f"biparental mean (n = {n})", "start": g["start"], "beta": g["beta_site_mean"]}))
+    return pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
+
+
+def shift_summary(shifts: pd.DataFrame, domain) -> str:
+    lines = [f"Domain chr15:{int(domain[0]):,}–{int(domain[1]):,}" if domain is not None else "No domain"]
+    for lv, d in shifts.groupby("level", sort=False):
+        a = d.loc[d["group"] == "PWS-DEL", "shift"]
+        b = d.loc[d["group"] == "AS-DEL", "shift"]
+        u = d.loc[d["group"] == "PWS-mUPD", "shift"]
+        bip = d.loc[d["group"] == "Biparental", "shift"]
+        diff, p, n = stats.label_permutation(a, b)
+        shifts.attrs[lv] = {"p": p, "diff": diff, "labellings": n}
+        below = int((bip > u.median()).sum()) if len(u) else 0
+        shifts.attrs[lv].update({"mupd_below": below, "n_biparental": len(bip)})
+        lines.append(f"{lv.split(' (')[0]}: PWS-DEL {np.median(a):+.3f}, AS-DEL {np.median(b):+.3f}, "
+                     f"PWS-mUPD {u.median():+.3f} (below {below} of {len(bip)} biparental); "
+                     f"PWS vs AS p = {style.fmt_p(p)} ({n} labellings)")
+    return "\n".join(lines)
+
+
+def main(argv=None) -> None:
+    global INPUTS, OUTPUT_DIR, ANALYSIS_REPORT_PATH, DOMAINS, REPEAT_BINS, SHIFTS, EXTRA_ROWS
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    paths_lib.add_common_arguments(ap)
+    ap.add_argument("--domain", help="START-END of the domain tested in panel c (default: scripts/duplicons 08)")
+    a = ap.parse_args(argv)
+    paths = paths_lib.resolve(a)
+    cis = paths.analysis / "03_cis_architecture"
+    INPUTS = {
+        "windows": cis / "parent_associated_windows.tsv.gz",
+        "window_participants": cis / "parent_window_participant_values.tsv.gz",
+        "focal": cis / "focal_intervals.tsv",
+        "regions": cis / "regional_parent_contrasts.tsv",
+        "regions_by_estimator": cis / "regional_parent_contrasts_by_estimator.tsv",
+        "participants": cis / "regional_participant_values.tsv.gz",
+        "asm": cis / "regional_phase_invariant_asm.tsv",
+        "missingness": cis / "participant_missingness.tsv",
+        "core": paths.analysis / "01_evidence_matrix" / "common_reciprocal_cn1_core.tsv",
+        "annotation": paths.analysis / "annotation_genes.tsv",
+    }
+    ANALYSIS_REPORT_PATH = cis / "figure2_analysis_report.tsv"
+    OUTPUT_DIR = paths.figure_dir(2, a.outdir)
     setup_style()
     tables = load_inputs()
     common = (int(tables["core"]["start"].iloc[0]), int(tables["core"]["end"].iloc[0]))
     windows = tables["windows"]
     if windows.loc[~windows["in_common_cn1"].astype(bool), "delta_beta"].notna().any():
         raise ValueError("Window table contains parental contrasts outside the common CN=1 interval")
-    paths = render_main(tables, common)
-    paths += render_profiles(tables, common)
-    paths += render_depth(tables)
-    paths.append(write_render_log(paths, tables, common))
-    paths.append(write_markdown_report(tables, common, paths))
-    for path in paths:
+    cohort = cohort_lib.load(paths.metadata)
+    labels = {s: cohort.label(s) for s in cohort.samples}
+    DOMAINS = load_domains(paths, a.domain)
+    domain = (int(DOMAINS["start"].iloc[0]), int(DOMAINS["end"].iloc[0])) if len(DOMAINS) else None
+    REPEAT_BINS = load_repeat_bins(paths)
+    matrix = load_matrix(paths)
+    EXTRA_ROWS = extra_rows(matrix, cohort, common)
+    parts = [cpg_domain_shifts(matrix, common, domain), repeat_domain_shifts(paths, domain)]
+    parts = [x for x in parts if len(x)]
+    SHIFTS = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+    if len(SHIFTS):
+        SHIFTS.attrs["note"] = shift_summary(SHIFTS, domain)
+    style.write_table(windows[windows["in_common_cn1"].astype(bool)], OUTPUT_DIR, "Figure2b_cpg_window_contrast.tsv")
+    style.write_table(REPEAT_BINS, OUTPUT_DIR, "Figure2b_repeat_bins.tsv")
+    style.write_table(SHIFTS, OUTPUT_DIR, "Figure2c_domain_shifts.tsv")
+    style.write_table(tables["regions"], OUTPUT_DIR, "Figure2d_regional_contrasts.tsv")
+    style.write_table(tables["asm"], OUTPUT_DIR, "Figure2e_phase_invariant_asm.tsv")
+    paths_out = render_main(tables, common, labels)
+    paths_out += render_profiles(tables, common, labels)
+    paths_out += render_depth(tables, labels)
+    paths_out.append(write_render_log(paths_out, tables, common))
+    paths_out.append(write_markdown_report(tables, common, paths_out))
+    for path in paths_out:
         print(path)
 
 
