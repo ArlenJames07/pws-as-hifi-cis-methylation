@@ -1,0 +1,6 @@
+sample,hap1,hap2,primary
+017C,/absolute/path/to/017C.bp.hap1.p_ctg.gfa,/absolute/path/to/017C.bp.hap2.p_ctg.gfa,
+008D,/absolute/path/to/008D.bp.hap1.p_ctg.gfa,/absolute/path/to/008D.bp.hap2.p_ctg.gfa,
+004P,/absolute/path/to/004P.bp.hap1.p_ctg.gfa,/absolute/path/to/004P.bp.hap2.p_ctg.gfa,
+001P,/absolute/path/to/001P.bp.hap1.p_ctg.gfa,/absolute/path/to/001P.bp.hap2.p_ctg.gfa,/absolute/path/to/001P.bp.p_ctg.gfa
+013A,,,/absolute/path/to/013A.bp.p_ctg.gfa
